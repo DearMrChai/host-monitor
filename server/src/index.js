@@ -15,6 +15,8 @@ import { createServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { store } from './store.js';
 import { evaluateCluster } from './status.js';
+import { history } from './history.js';
+import { alertEngine } from './alerts.js';
 
 const AGENT_PORT = 9100;
 const CLIENT_PORT = 9101;
@@ -30,6 +32,9 @@ try {
 } catch {
   console.log('[Server] No probes.json, agents will probe the Server arm only');
 }
+
+// P5: replay persisted active alerts so a restart doesn't lose them (design §7).
+alertEngine.restoreActive(history.activeAlertRows());
 
 // ============================================================
 // Agent WebSocket Server (port 9100)
@@ -99,6 +104,18 @@ app.get('/api/alerts', (req, res) => {
   res.json(store.getSnapshot().alerts);
 });
 
+// P5: persisted history. GET /api/history/<host_id>?range=2h|24h|7d|30d
+app.get('/api/history/:hostId', (req, res) => {
+  const valid = ['2h', '24h', '7d', '30d'];
+  const range = valid.includes(req.query.range) ? req.query.range : '2h';
+  res.json(history.getSeries(req.params.hostId, range));
+});
+
+// P5: full alert lifecycle log (memory list keeps only the 5-min fold window)
+app.get('/api/alerts/history', (req, res) => {
+  res.json({ alerts: history.alertHistory(Number(req.query.limit) || 200) });
+});
+
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', uptime: process.uptime() });
 });
@@ -116,11 +133,13 @@ clientWss.on('connection', (ws) => {
   ws.on('close', () => console.log('[Server] Client disconnected'));
 });
 
-// Periodic broadcast
+// Periodic broadcast (also the P5 persistence sampling point - design §3)
 setInterval(() => {
-  const snapshot = JSON.stringify(store.getSnapshot());
+  const snapshot = store.getSnapshot();
+  history.onBroadcast(snapshot.hosts);
+  const payload = JSON.stringify(snapshot);
   for (const client of clientWss.clients) {
-    if (client.readyState === WebSocket.OPEN) client.send(snapshot);
+    if (client.readyState === WebSocket.OPEN) client.send(payload);
   }
 }, BROADCAST_INTERVAL_MS);
 

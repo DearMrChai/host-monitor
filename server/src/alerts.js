@@ -12,6 +12,7 @@
  *    host.status.instant_level; in-window suspects appear in host.status.pending
  */
 import { thresholds } from './status.js'
+import { history } from './history.js'
 
 const cfg = thresholds.alert || {}
 const DEBOUNCE_CYCLES = cfg.debounce_cycles ?? 3
@@ -68,7 +69,9 @@ class AlertEngine {
         } else { // active
           e.latest_value = r.value
           e.underCycles = 0
-          if (RANK[r.level] > RANK[e.level]) e.level = r.level // escalate immediately
+          const escalated = RANK[r.level] > RANK[e.level]
+          if (escalated) e.level = r.level // escalate immediately
+          if (escalated || now - (e._persistedAt || 0) >= 10_000) persist(e)
         }
       }
     }
@@ -82,6 +85,7 @@ class AlertEngine {
         if (e.underCycles >= DEBOUNCE_CYCLES) {
           e.state = 'resolved'
           e.resolved_at = Date.now()
+          persist(e)
         }
       } else if (Date.now() - e.resolved_at > KEEP_MS) {
         this.entries.delete(key)
@@ -104,6 +108,25 @@ class AlertEngine {
     e.value_at_trigger = r.value
     e.threshold = r.threshold
     e.underCycles = 0
+    persist(e)
+  }
+
+  /** P5: rebuild active entries persisted before a restart (design §7). */
+  restoreActive(rows) {
+    let n = 0
+    for (const r of rows) {
+      if (this.entries.has(r.id)) continue
+      this.entries.set(r.id, {
+        id: r.id, host_id: r.host_id, hostname: r.hostname,
+        metric: r.metric, source: r.source, level: r.level,
+        state: 'active', overCycles: DEBOUNCE_CYCLES,
+        underCycles: DEBOUNCE_CYCLES - 1, // self-heals within 2 clean ticks
+        value_at_trigger: r.value_at_trigger, latest_value: r.latest_value,
+        threshold: r.threshold, started_at: r.started_at, resolved_at: null,
+      })
+      n += 1
+    }
+    if (n) console.log(`[Alerts] Restored ${n} active alert(s) from disk`)
   }
 
   apply(hosts) {
@@ -157,6 +180,11 @@ class AlertEngine {
     resolved.sort((x, y) => y.resolved_at - x.resolved_at)
     return { active, resolved }
   }
+}
+
+function persist(e) {
+  e._persistedAt = Date.now()
+  history.recordAlert(e)
 }
 
 export const alertEngine = new AlertEngine()

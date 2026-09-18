@@ -24,10 +24,6 @@ const topology = ref(defaultTopology)
 const hostName = ref('')
 const drawerSpec = ref(null)
 
-/* Client-side RTT ring per probe target (~60 frames = 2 min window, P5 will
-   replace with server history). */
-const rttHistory = ref({})
-
 let renderer = null
 
 function buildTopologyFromMetrics(host) {
@@ -116,19 +112,6 @@ const alarmMap = computed(() => {
 const nodeLevel = computed(() => props.host?.status?.level ||
   (props.host?.online ? 'OK' : 'OFFLINE'))
 
-const drawerRtt = computed(() =>
-  (drawerSpec.value?.kind === 'link' && rttHistory.value[drawerSpec.value.target]) || [])
-
-function recordRtt(host) {
-  const targets = host.status?.components?.link?.targets || []
-  for (const t of targets) {
-    if (t.rtt_ms == null) continue
-    const arr = rttHistory.value[t.target] || (rttHistory.value[t.target] = [])
-    arr.push(t.rtt_ms)
-    if (arr.length > 120) arr.splice(0, arr.length - 120)
-  }
-}
-
 function sync3D(host) {
   if (!renderer || !host?.metrics || !host.online) return
   renderer.updateMetrics(host.metrics, alarmMap.value)
@@ -144,7 +127,6 @@ watch(() => props.host, (host) => {
     buildScene(newTopo)
   }
   sync3D(host)
-  if (host.online) recordRtt(host)
 })
 
 onMounted(() => {
@@ -204,7 +186,7 @@ onBeforeUnmount(() => {
         </div>
 
         <DrawerV3 v-if="host && drawerSpec" :host="host" :spec="drawerSpec"
-                  :thresholds="thresholds" :rtt-history="drawerRtt"
+                  :thresholds="thresholds"
                   @close="drawerSpec = null" />
       </div>
 

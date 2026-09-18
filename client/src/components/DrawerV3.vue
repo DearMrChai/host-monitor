@@ -1,15 +1,16 @@
 <script setup>
-import { computed } from 'vue'
+import { ref, computed, watch, onBeforeUnmount } from 'vue'
+import TrendChart from './TrendChart.vue'
 import { STATUS_TEXT, ROLE_LABELS, formatUptime } from '../lib/status.js'
 
-/* V3 drawer: bottom slide-out with per-component / per-link detail (P4).
-   Only "current window" data — history curves arrive with P5. */
+/* V3 drawer: bottom slide-out with per-component / per-link detail (P4),
+   P5: server-side history trend charts (GET /api/history) + persisted
+   alert log in the system view. */
 
 const props = defineProps({
   host: { type: Object, required: true },
   spec: { type: Object, required: true },   // {kind, index?, target?, name?}
   thresholds: { type: Object, default: () => ({}) },
-  rttHistory: { type: Array, default: () => [] },  // recent rtt_ms samples for link kind
 })
 defineEmits(['close'])
 
@@ -40,24 +41,96 @@ const linkTarget = computed(() => {
     .find(t => t.target === props.spec.target) || null
 })
 
-/* RTT mini chart: 60-point window, log-free linear scale */
-const chart = computed(() => {
-  const pts = props.rttHistory.slice(-60)
-  if (!pts.length) return null
-  const th = props.thresholds.rtt_ms || { warn: 5, crit: 50 }
-  const max = Math.max(th.crit * 1.2, ...pts, 1)
-  const W = 260, H = 64
-  const x = (i) => pts.length === 1 ? W / 2 : (i / (pts.length - 1)) * W
-  const y = (v) => H - (v / max) * (H - 6) - 3
-  const line = pts.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ')
-  return {
-    W, H, line, max,
-    warnY: y(th.warn).toFixed(1), critY: y(th.crit).toFixed(1),
-    thWarn: th.warn, thCrit: th.crit,
+const rows = (obj) => Object.entries(obj).filter(([, v]) => v !== undefined && v !== null)
+
+/* ---------- P5: server history ---------- */
+
+const RANGE_OPTIONS = ['2h', '24h', '7d', '30d']
+const TREND_KINDS = ['cpu', 'gpu', 'mem', 'disk', 'link']
+
+const range = ref('2h')
+const history = ref(null)
+const alertLog = ref([])
+let timer = null
+
+async function reload() {
+  const { kind } = props.spec
+  if (kind === 'system') {
+    try {
+      const res = await fetch('/api/alerts/history?limit=100')
+      const data = await res.json()
+      alertLog.value = (data.alerts || []).filter(a => a.host_id === props.host.host_id)
+    } catch { alertLog.value = [] }
+    return
   }
+  if (!TREND_KINDS.includes(kind)) { history.value = null; return }
+  try {
+    const res = await fetch(
+      `/api/history/${encodeURIComponent(props.host.host_id)}?range=${range.value}`)
+    history.value = await res.json()
+  } catch { history.value = null }
+}
+
+watch(
+  () => [props.spec.kind, props.spec.index, props.spec.target, range.value, props.host.host_id],
+  () => {
+    reload()
+    clearInterval(timer)
+    timer = setInterval(reload, 60_000)
+  },
+  { immediate: true },
+)
+onBeforeUnmount(() => clearInterval(timer))
+
+const trendSeries = computed(() => {
+  const h = history.value
+  const s = props.spec
+  if (!h || !TREND_KINDS.includes(s.kind)) return []
+  const th = props.thresholds
+  switch (s.kind) {
+    case 'cpu':
+      return [
+        { label: 'CPU 占用', unit: '%', vals: h.cpu.usage, ...th.cpu_usage, color: '#2e7d32' },
+        { label: 'CPU 温度', unit: '°C', vals: h.cpu.temp, ...th.cpu_temp, color: '#e65100' },
+      ]
+    case 'gpu': {
+      const g = h.gpu?.[s.index]
+      if (!g) return []
+      return [
+        { label: 'GPU 占用', unit: '%', vals: g.usage, color: '#7c4dff' },
+        { label: 'GPU 温度', unit: '°C', vals: g.temp, ...th.gpu_temp, color: '#e65100' },
+      ]
+    }
+    case 'mem':
+      return [{ label: '内存占用', unit: '%', vals: h.mem.percent, ...th.mem, color: '#2196f3' }]
+    case 'disk':
+      return [
+        { label: '最大分区', unit: '%', vals: h.disk.worst, ...th.disk, color: '#00695c' },
+        { label: '写入', unit: ' MB/s', vals: h.disk.io_write, color: '#8d6e63' },
+      ]
+    case 'link': {
+      const l = h.link?.[s.target]
+      if (!l) return []
+      return [
+        { label: 'RTT', unit: 'ms', vals: l.rtt, ...th.rtt_ms, color: '#0969da' },
+        { label: '丢包', unit: '%', vals: l.loss, ...th.packet_loss, color: '#f85149' },
+      ]
+    }
+  }
+  return []
 })
 
-const rows = (obj) => Object.entries(obj).filter(([, v]) => v !== undefined && v !== null)
+const fmtTs = (t) => t != null && new Date(t).toLocaleString('zh-CN', {
+  month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+})
+
+const fmtDur = (ms) => {
+  if (ms == null) return '—'
+  const s = Math.round(ms / 1000)
+  if (s < 60) return `${s}s`
+  if (s < 3600) return `${Math.floor(s / 60)}m${s % 60 ? (s % 60) + 's' : ''}`
+  return `${Math.floor(s / 3600)}h${Math.floor((s % 3600) / 60)}m`
+}
 </script>
 
 <template>
@@ -149,14 +222,6 @@ const rows = (obj) => Object.entries(obj).filter(([, v]) => v !== undefined && v
           RTT {{ linkTarget.rtt_ms ?? '无数据' }}ms · 丢包 {{ linkTarget.loss_pct ?? '—' }}% ·
           {{ STATUS_TEXT[linkTarget.level] || 'OK' }}
         </div>
-        <svg v-if="chart" class="rtt-chart" :viewBox="`0 0 ${chart.W} ${chart.H}`">
-          <line :y1="chart.warnY" :y2="chart.warnY" x1="0" :x2="chart.W" class="th-warn" />
-          <line :y1="chart.critY" :y2="chart.critY" x1="0" :x2="chart.W" class="th-crit" />
-          <polyline :points="chart.line" class="rtt-line" />
-          <text x="2" :y="chart.warnY - 2" class="th-label">{{ chart.thWarn }}ms</text>
-          <text x="2" :y="chart.critY - 2" class="th-label">{{ chart.thCrit }}ms</text>
-        </svg>
-        <div class="dw-note">近 {{ Math.min(rttHistory.length, 60) }} 个广播帧（约 {{ Math.min(rttHistory.length, 60) * 2 }}s）客户端窗口，历史曲线见 P5</div>
       </div>
 
       <!-- System -->
@@ -171,6 +236,40 @@ const rows = (obj) => Object.entries(obj).filter(([, v]) => v !== undefined && v
             })" :key="k"><b>{{ k }}</b><span>{{ v }}</span></div>
         </div>
         <div class="dw-note" v-if="!m.system?.load_avg">Windows 无 load average，显示为空属预期</div>
+        <div class="alert-log" v-if="alertLog.length">
+          <div class="al-title">本机告警史（持久化，含重启前记录）</div>
+          <table class="dw-table">
+            <thead><tr><th>级别</th><th>指标</th><th>状态</th><th>开始</th><th>持续</th></tr></thead>
+            <tbody>
+              <tr v-for="a in alertLog" :key="a.id + a.started_at">
+                <td :class="'lv-' + a.level.toLowerCase()">{{ a.level }}</td>
+                <td>{{ a.metric }}<template v-if="a.source !== a.metric"> @{{ a.source }}</template></td>
+                <td>{{ a.state === 'active' ? '进行中' : '已恢复' }}</td>
+                <td>{{ fmtTs(a.started_at) }}</td>
+                <td>{{ fmtDur((a.resolved_at || Date.now()) - a.started_at) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- P5: server-side history trends (cpu/gpu/mem/disk/link) -->
+      <div class="trend-sec" v-if="trendSeries.length">
+        <div class="trend-head">
+          <span>历史趋势</span>
+          <span class="range-btns">
+            <button v-for="r in RANGE_OPTIONS" :key="r"
+                    :class="{ on: range === r }" @click="range = r">{{ r }}</button>
+          </span>
+        </div>
+        <div class="trend-charts">
+          <TrendChart v-for="s in trendSeries" :key="s.label"
+                      :ts="history.ts" :vals="s.vals" :label="s.label" :unit="s.unit"
+                      :warn="s.warn" :crit="s.crit" :color="s.color" />
+        </div>
+        <div class="dw-note" v-if="!host.online">
+          节点离线，曲线为持久化历史（数据截至 {{ fmtTs(host.lastSeen) }}）
+        </div>
       </div>
 
     </div>
@@ -227,9 +326,22 @@ const rows = (obj) => Object.entries(obj).filter(([, v]) => v !== undefined && v
 .pct-bar i.warn { background: var(--orange); }
 .pct-bar i.crit { background: var(--red); }
 
-.rtt-chart { width: 100%; max-width: 420px; height: 72px; background: rgba(0, 0, 0, .03); border-radius: 6px; }
-.rtt-line { fill: none; stroke: var(--accent); stroke-width: 1.5; }
-.th-warn { stroke: var(--orange); stroke-dasharray: 3 3; stroke-width: .8; }
-.th-crit { stroke: var(--red); stroke-dasharray: 3 3; stroke-width: .8; }
-.th-label { font-size: 7px; fill: var(--text3); }
+.trend-sec { margin-top: 12px; border-top: 1px dashed var(--border); padding-top: 8px; }
+.trend-head {
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 12px; font-weight: 600; color: var(--text2); margin-bottom: 6px;
+}
+.range-btns button {
+  border: 1px solid var(--border); background: none; border-radius: 5px;
+  font: inherit; font-size: 10px; padding: 1px 7px; margin-left: 4px;
+  cursor: pointer; color: var(--text2);
+}
+.range-btns button.on { border-color: var(--accent); color: var(--accent); background: rgba(88,166,255,.08); }
+.trend-charts { display: flex; flex-wrap: wrap; gap: 10px 18px; }
+
+.alert-log { margin-top: 12px; border-top: 1px dashed var(--border); padding-top: 8px; }
+.al-title { font-size: 12px; font-weight: 600; color: var(--text2); margin-bottom: 6px; }
+.lv-crit { color: var(--red); font-weight: 700; }
+.lv-warn { color: var(--orange); font-weight: 600; }
+.lv-offline { color: var(--text3); font-weight: 600; }
 </style>

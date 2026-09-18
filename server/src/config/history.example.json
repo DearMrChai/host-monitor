@@ -1,0 +1,8 @@
+{
+  "enabled": true,
+  "db_path": "data/host-monitor.db",
+  "sample_interval_s": 5,
+  "raw_retention_days": 7,
+  "agg_retention_days": 30,
+  "chart_points": 96
+}
