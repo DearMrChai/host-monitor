@@ -6,7 +6,9 @@ import { sound, toggleMute, unlock } from '../lib/sound.js'
 const props = defineProps({
   cluster: { type: Object, default: null },
   connected: { type: Boolean, default: false },
+  view: { type: String, default: 'overview' },
 })
+defineEmits(['toggle'])
 
 function onBell() {
   unlock()
@@ -39,6 +41,11 @@ const bars = computed(() => {
       <span class="cb-online" v-if="cluster">
         在线 <b>{{ cluster.online }}</b>/{{ cluster.total }}
       </span>
+      <span class="link-degraded" :class="cluster?.link?.worst_level?.toLowerCase()"
+            v-if="cluster?.link?.worst_level"
+            title="链路异常节点数（详见拓扑视图）">
+        链路异常 {{ cluster.link.degraded_count }}
+      </span>
     </div>
     <div class="cb-agg" v-if="cluster">
       <span class="agg" v-for="b in bars" :key="b.key">
@@ -53,6 +60,10 @@ const bars = computed(() => {
         </span>
         <span class="agg-val na" v-else>—</span>
       </span>
+    </div>
+    <div class="cb-view">
+      <button :class="{ active: view === 'overview' }" @click="$emit('toggle', 'overview')">总览</button>
+      <button :class="{ active: view === 'topology' }" @click="$emit('toggle', 'topology')">拓扑</button>
     </div>
     <div class="cb-sound">
       <span v-if="!sound.unlocked" class="unlock-hint" @click="onBell">点击激活声音</span>
@@ -90,6 +101,17 @@ const bars = computed(() => {
 .health-pill.offline .hp-dot { background: var(--text3); }
 
 .cb-online { font-size: 12px; color: var(--text2); }
+.link-degraded {
+  font-size: 11px; padding: 2px 9px; border-radius: 10px;
+  border: 1px solid var(--orange); color: #9a6700; background: rgba(210,153,34,.10);
+}
+.link-degraded.crit { border-color: var(--red); color: #b62324; background: rgba(248,81,73,.10); }
+.cb-view { display: flex; gap: 0; border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
+.cb-view button {
+  font: inherit; font-size: 12px; border: none; cursor: pointer;
+  padding: 4px 14px; background: var(--bg-glass); color: var(--text2);
+}
+.cb-view button.active { background: var(--accent); color: #fff; }
 .cb-agg { display: flex; gap: 18px; }
 .agg { display: flex; align-items: center; gap: 6px; }
 .agg-label { font-size: 11px; color: var(--text2); }

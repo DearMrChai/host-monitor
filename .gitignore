@@ -5,3 +5,5 @@ __pycache__/
 dist/
 *.log
 .DS_Store
+# 真实内网探测目标（含局域网 IP），提交用 probes.example.json 占位
+server/src/config/probes.json

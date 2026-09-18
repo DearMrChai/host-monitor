@@ -1,16 +1,15 @@
 <script setup>
 import { computed } from 'vue'
-import ClusterBar from '../components/ClusterBar.vue'
-import AlertBanner from '../components/AlertBanner.vue'
 import HostCard from '../components/HostCard.vue'
 import AlertPanel from '../components/AlertPanel.vue'
 import { sortHostsForOverview } from '../lib/status.js'
 
+/* V1 overview body. Cluster bar + alert banner live in the App shell
+   since P3 (shared with the V1.5 topology view). */
+
 const props = defineProps({
   hosts: { type: Array, default: () => [] },
-  cluster: { type: Object, default: null },
   alerts: { type: Object, default: () => ({ active: [], resolved: [] }) },
-  connected: { type: Boolean, default: false },
 })
 defineEmits(['open'])
 
@@ -19,8 +18,6 @@ const sorted = computed(() => sortHostsForOverview(props.hosts))
 
 <template>
   <div class="overview">
-    <ClusterBar :cluster="cluster" :connected="connected" />
-    <AlertBanner :alerts="alerts.active || []" @open="id => $emit('open', id)" />
     <div class="ov-body">
       <main class="ov-grid">
         <div v-if="!sorted.length" class="ov-empty">

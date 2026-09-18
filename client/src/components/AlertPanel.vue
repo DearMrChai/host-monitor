@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref, onUnmounted } from 'vue'
-import { LEVEL_RANK, STATUS_TEXT, METRIC_LABELS } from '../lib/status.js'
+import { LEVEL_RANK, STATUS_TEXT, formatReason } from '../lib/status.js'
 
 /* P2: driven by the debounced alert engine (active + resolved window),
    no longer by instantaneous reasons. */
@@ -27,10 +27,7 @@ function duration(a) {
 }
 
 function metricText(a) {
-  const label = METRIC_LABELS[a.metric] || a.metric
-  const source = a.source && !['cpu', 'mem', 'heartbeat'].includes(a.source) ? ` ${a.source}` : ''
-  const unit = a.metric.endsWith('temp') ? '°C' : a.metric === 'offline' ? 's' : '%'
-  return `${label}${source} ${a.latest_value}${unit}（阈值 ${a.threshold}）`
+  return formatReason({ ...a, value: a.latest_value })
 }
 </script>
 

@@ -1,0 +1,8 @@
+{
+  "probe_interval_seconds": 5,
+  "window_size": 10,
+  "gateway": { "name": "网关", "host": "192.168.1.1" },
+  "key_hosts": [
+    { "id": "db-main", "name": "db-main", "host": "192.168.1.10", "tcp_port": 22 }
+  ]
+}

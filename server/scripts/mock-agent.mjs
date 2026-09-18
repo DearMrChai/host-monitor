@@ -1,9 +1,13 @@
 /**
- * P1 self-test mock agent: registers 3 fake nodes against the Server (port 9100).
+ * Self-test mock agent: registers fake nodes against the Server (port 9100).
  *
- *   mock-green  (desktop)   all-normal metrics, keeps streaming
- *   mock-warn   (inference) GPU 89C WARN + disk 86% + mem 87%, keeps streaming
- *   mock-silent (db)        one frame then silence -> OFFLINE after 15s
+ *   mock-green    (desktop)   all-normal metrics, keeps streaming
+ *   mock-warn     (inference) GPU 89C WARN + disk 86% + mem 87%, keeps streaming
+ *   mock-silent   (db)        one frame then silence -> OFFLINE after 15s
+ *   mock-flap     (laptop)    2-frames-over/2-under CPU bursts, must never fire
+ *   mock-crit     (display)   sustained disk 96% -> CRIT active
+ *   mock-lag      (other)     server-arm RTT square wave 3<->60ms (P3: debounce + link levels)
+ *   mock-gwdown   (other)     gateway 100% loss, server arm healthy (P3: one red arm only)
  *
  * Usage: node scripts/mock-agent.mjs [--server ws://localhost:9100] [--interval 2]
  */
@@ -19,6 +23,18 @@ const INTERVAL = Number(arg('interval', 2)) * 1000
 
 const jitter = (base, span = 6) =>
   Math.min(99, Math.max(1, base + Math.round((Math.random() - 0.5) * span)))
+
+function healthyProbes() {
+  const r = (base) => Math.max(0.3, Math.round((base + (Math.random() - 0.5) * 0.6) * 10) / 10)
+  return {
+    interval_s: 5, window: 10,
+    results: [
+      { target: 'server', name: 'Server', kind: 'ws', rtt_ms: r(1), loss_pct: 0 },
+      { target: 'gateway', name: '网关', kind: 'icmp', rtt_ms: r(1.4), loss_pct: 0 },
+      { target: 'infer-142', name: 'infer-142', kind: 'icmp', rtt_ms: r(1.2), loss_pct: 0 },
+    ],
+  }
+}
 
 function frame(hostId, hostname, cpu, mem, gpus, diskParts) {
   return {
@@ -44,6 +60,7 @@ function frame(hostId, hostname, cpu, mem, gpus, diskParts) {
       used_gb: Math.round(diskParts.reduce((a, p) => a + p.t * p.p, 0) / 100 * 10) / 10,
     },
     system: { uptime_seconds: 345600, load_avg: [1.2, 0.9, 0.8] },
+    probes: healthyProbes(),
   }
 }
 
@@ -87,6 +104,34 @@ const MOCKS = [
     frame: () => {
       const f = frame('mock-crit', 'mock-crit', 18, 44, [], [{ m: 'C:', t: 119, p: 96 }])
       f.disk.worst_percent = 96
+      return f
+    },
+  },
+  {
+    // P3: server-arm RTT square wave, ~12s healthy then ~12s at 62ms (CRIT>50)
+    host_id: 'mock-lag', hostname: 'mock-lag', role: 'other', silent: false,
+    _n: 0,
+    frame: () => {
+      const m = MOCKS[5]
+      m._n = (m._n + 1) % 12
+      const f = frame('mock-lag', 'mock-lag', 15, 30, [], [{ m: 'C:', t: 200, p: 25 }])
+      const laggy = m._n >= 6
+      f.probes.results[0] = {
+        target: 'server', name: 'Server', kind: 'ws',
+        rtt_ms: laggy ? Math.round(62 + Math.random() * 4) : Math.round((2.5 + Math.random()) * 10) / 10,
+        loss_pct: 0,
+      }
+      return f
+    },
+  },
+  {
+    // P3: gateway + infer-142 arms 100% loss while server arm stays healthy
+    // -> node red from link only; exactly one green arm in the topology view
+    host_id: 'mock-gwdown', hostname: 'mock-gwdown', role: 'other', silent: false,
+    frame: () => {
+      const f = frame('mock-gwdown', 'mock-gwdown', 16, 33, [], [{ m: 'C:', t: 200, p: 28 }])
+      f.probes.results[1] = { target: 'gateway', name: '网关', kind: 'icmp', rtt_ms: null, loss_pct: 100 }
+      f.probes.results[2] = { target: 'infer-142', name: 'infer-142', kind: 'icmp', rtt_ms: null, loss_pct: 100 }
       return f
     },
   },

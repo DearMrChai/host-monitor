@@ -41,7 +41,7 @@ export function evaluateHost(host) {
     mem: { level: null, percent: null },
     disk: { level: null, worst_percent: null, worst_mount: null },
     gpu: [],
-    link: { level: null }, // no probe data until P3
+    link: { level: null, targets: [] }, // filled from m.probes below (P3)
   };
   const reasons = [];
 
@@ -94,10 +94,32 @@ export function evaluateHost(host) {
       });
       pushReason(reasons, 'gpu_temp', `gpu${g.index ?? 0}`, g.temperature_c, thresholds.gpu_temp, l);
     }
+
+    // Link: star probe results (P3). Indeterminate targets are absent from
+    // the frame entirely, so a restricted network never false-alarms.
+    const linkTargets = [];
+    for (const p of m.probes?.results || []) {
+      const lr = levelFor(p.rtt_ms, thresholds.rtt_ms);
+      const ll = levelFor(p.loss_pct, thresholds.packet_loss);
+      const l = worstLevel(lr, ll);
+      linkTargets.push({
+        target: p.target, name: p.name, kind: p.kind,
+        rtt_ms: p.rtt_ms ?? null, loss_pct: p.loss_pct ?? null, level: l,
+      });
+      pushReason(reasons, 'rtt_ms', p.target, p.rtt_ms, thresholds.rtt_ms, lr);
+      pushReason(reasons, 'packet_loss', p.target, p.loss_pct, thresholds.packet_loss, ll);
+    }
+    components.link = {
+      level: linkTargets.length
+        ? (worstLevel(...linkTargets.map((t) => t.level)) || 'OK')
+        : null,
+      targets: linkTargets,
+    };
   }
 
   const level = worstLevel(
     components.cpu.level, components.mem.level, components.disk.level,
+    components.link.level,
     ...components.gpu.map((g) => g.level),
   ) || 'OK';
 
@@ -119,10 +141,17 @@ export function evaluateCluster(hosts) {
   const online = hosts.filter((h) => h.online);
   const gpusOf = (h) => (h.metrics?.gpu || []);
 
+  const linkLevels = online.map((h) => h.status?.components?.link?.level)
+    .filter((l) => l && l !== 'OK');
+
   return {
     health: worstLevel(...hosts.map((h) => h.status?.level)) || 'OK',
     online: online.length,
     total: hosts.length,
+    link: {
+      worst_level: worstLevel(...linkLevels) || null,
+      degraded_count: linkLevels.length,
+    },
     aggregate: {
       cpu: { avg: avg(online.map((h) => h.metrics?.cpu?.usage_percent)),
              peak: peak(online.map((h) => h.metrics?.cpu?.usage_percent)) },

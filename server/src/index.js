@@ -10,6 +10,7 @@
  */
 import express from 'express';
 import cors from 'cors';
+import { readFileSync } from 'fs';
 import { createServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { store } from './store.js';
@@ -18,6 +19,17 @@ import { evaluateCluster } from './status.js';
 const AGENT_PORT = 9100;
 const CLIENT_PORT = 9101;
 const BROADCAST_INTERVAL_MS = 2000;
+
+// Star-probe plan pushed to every Agent in the register ack (P3).
+// Real targets live in probes.json (gitignored); copy probes.example.json
+// to start. Missing file -> Agents fall back to Server-only probing.
+let probePlan = null;
+try {
+  probePlan = JSON.parse(
+    readFileSync(new URL('./config/probes.json', import.meta.url), 'utf8'));
+} catch {
+  console.log('[Server] No probes.json, agents will probe the Server arm only');
+}
 
 // ============================================================
 // Agent WebSocket Server (port 9100)
@@ -49,7 +61,7 @@ agentWss.on('connection', (ws, req) => {
             `${t.memory?.sticks?.length || 0} DIMM, ` +
             `${t.gpu?.length || 0} GPU`);
         }
-        ws.send(JSON.stringify({ type: 'registered', host_id: hostId }));
+        ws.send(JSON.stringify({ type: 'registered', host_id: hostId, probe_plan: probePlan }));
       } else if (msg.type === 'metrics') {
         hostId = msg.host_id || hostId;
         if (hostId) store.updateMetrics(hostId, msg);

@@ -47,12 +47,26 @@ export function formatUptime(seconds) {
 export const METRIC_LABELS = {
   cpu_usage: 'CPU占用', cpu_temp: 'CPU温度', mem: '内存',
   disk: '磁盘', gpu_temp: 'GPU温度', offline: '失联',
+  rtt_ms: '链路延迟', packet_loss: '丢包率',
 }
 
 export function formatReason(r) {
   const label = METRIC_LABELS[r.metric] || r.metric
-  const source = r.source && r.source !== r.metric && r.source !== 'cpu' && r.source !== 'mem'
-    ? ` ${r.source}` : ''
-  const unit = r.metric.endsWith('temp') ? '°C' : r.metric === 'offline' ? 's' : '%'
+  const isLink = r.metric === 'rtt_ms' || r.metric === 'packet_loss'
+  const source = isLink ? ` ↔${r.source}`
+    : (r.source && !['cpu', 'mem', 'heartbeat'].includes(r.source) && r.source !== r.metric
+      ? ` ${r.source}` : '')
+  const unit = isLink ? (r.metric === 'rtt_ms' ? 'ms' : '%')
+    : r.metric.endsWith('temp') ? '°C' : r.metric === 'offline' ? 's' : '%'
   return `${label}${source} ${r.value}${unit}（阈值 ${r.threshold}）`
+}
+
+// Device-only level (excludes link), for the topology block face color
+export function deviceLevel(host) {
+  if (!host.online) return 'OFFLINE'
+  const c = host.status?.components || {}
+  const levels = [c.cpu?.level, c.mem?.level, c.disk?.level,
+    ...(c.gpu || []).map(g => g.level)].filter(Boolean)
+  if (!levels.length) return null
+  return levels.reduce((a, l) => (LEVEL_RANK[l] > LEVEL_RANK[a] ? l : a))
 }

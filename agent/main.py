@@ -18,6 +18,7 @@ import websockets
 
 from collectors import cpu, disk, gpu, memory, network, system
 from collectors.topology import detect_topology
+from prober import Prober
 
 ROLES = ("db", "inference", "desktop", "laptop", "display", "other")
 
@@ -63,9 +64,14 @@ async def run_agent(server_url, interval):
 
     print(f"[Agent] Connecting...")
 
+    ws_ref = {"ws": None}           # shared with prober: current connection or None
+    prober = Prober(ws_ref)
+
     while True:
         try:
             async with websockets.connect(server_url) as ws:
+                ws_ref["ws"] = ws
+                prober.reset_target("server")  # fresh window after (re)connect
                 print(f"[Agent] Connected to {server_url}")
 
                 # Send registration with topology
@@ -77,19 +83,34 @@ async def run_agent(server_url, interval):
                     "role": ARGS.role,
                     "topology": topo,
                 }))
-                print(f"[Agent] Registered with topology")
 
-                # Stream metrics
+                # Registered ack carries the probe plan (P3). Old servers
+                # without it just leave us probing the Server arm only.
+                try:
+                    ack = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+                    plan = ack.get("probe_plan")
+                    prober.apply_plan(plan)
+                    if plan:
+                        print(f"[Agent] Probe plan: "
+                              f"{', '.join(t['id'] for t in prober._targets)}")
+                except (asyncio.TimeoutError, json.JSONDecodeError) as e:
+                    print(f"[Agent] No probe plan received ({e}); server-only probing")
+                prober.start()
+
+                # Stream metrics (probe results ride along)
                 while True:
                     frame = collect_all()
                     frame["type"] = "metrics"
+                    frame["probes"] = prober.snapshot()
                     await ws.send(json.dumps(frame))
                     await asyncio.sleep(interval)
 
         except (websockets.exceptions.ConnectionClosed, ConnectionRefusedError, OSError) as e:
+            ws_ref["ws"] = None
             print(f"[Agent] Connection lost: {e}. Retrying in 5s...")
             await asyncio.sleep(5)
         except Exception as e:
+            ws_ref["ws"] = None
             print(f"[Agent] Error: {e}. Retrying in 5s...")
             await asyncio.sleep(5)
 

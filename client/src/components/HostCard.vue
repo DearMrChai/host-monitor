@@ -1,6 +1,6 @@
 <script setup>
 import { computed } from 'vue'
-import { hostLevel, LEVEL_RANK, ROLE_LABELS, formatUptime, formatReason } from '../lib/status.js'
+import { hostLevel, LEVEL_RANK, ROLE_LABELS, STATUS_TEXT, formatUptime, formatReason } from '../lib/status.js'
 
 const props = defineProps({ host: { type: Object, required: true } })
 defineEmits(['open'])
@@ -42,6 +42,17 @@ const reasons = computed(() => {
 })
 
 const linkLevel = computed(() => comp.value.link?.level || null)
+const linkTargets = computed(() => comp.value.link?.targets || [])
+const serverRtt = computed(() =>
+  linkTargets.value.find(t => t.target === 'server')?.rtt_ms ?? null)
+const linkTip = computed(() => linkTargets.value.length
+  ? linkTargets.value.map(t =>
+      `${t.name} ${t.rtt_ms != null ? t.rtt_ms + 'ms' : '—'} 丢${t.loss_pct}%`).join(' · ')
+  : '暂无链路探测数据')
+const linkText = computed(() => {
+  if (!linkLevel.value) return '—'
+  return serverRtt.value != null ? `↘${serverRtt.value}ms` : STATUS_TEXT[linkLevel.value]
+})
 const uptime = computed(() => formatUptime(m.value?.system?.uptime_seconds))
 const pending = computed(() => props.host.status?.pending || [])
 </script>
@@ -55,8 +66,9 @@ const pending = computed(() => props.host.status?.pending || [])
       <span class="hc-role">{{ ROLE_LABELS[host.role] || host.role || '其他' }}</span>
     </div>
 
-    <div class="hc-link" :title="linkLevel ? '链路状态' : '链路探测 P3 上线'">
-      链路 <b :class="linkLevel ? linkLevel.toLowerCase() : 'na'">{{ linkLevel || '—' }}</b>
+    <div class="hc-link" :title="linkTip">
+      链路 <i class="lk-dot" :class="linkLevel ? linkLevel.toLowerCase() : 'na'" />
+      <b :class="linkLevel ? linkLevel.toLowerCase() : 'na'">{{ linkText }}</b>
       <span class="hc-uptime" v-if="uptime">开机 {{ uptime }}</span>
     </div>
 
@@ -106,6 +118,12 @@ const pending = computed(() => props.host.status?.pending || [])
 
 .hc-link { font-size: 11px; color: var(--text3); display: flex; align-items: center; gap: 6px; }
 .hc-link b { font-weight: 600; }
+.lk-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); flex-shrink: 0; }
+.lk-dot.na { background: var(--text3); }
+.lk-dot.warn { background: var(--orange); }
+.lk-dot.crit { background: var(--red); }
+.lk-dot.offline { background: var(--text3); }
+.hc-link b.ok { color: var(--green); }
 .hc-link b.na { color: var(--text3); }
 .hc-link b.warn { color: var(--orange); }
 .hc-link b.crit { color: var(--red); }
