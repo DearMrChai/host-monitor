@@ -1,0 +1,164 @@
+/* ============================================================
+   Host Monitor - 3D Topology Dashboard
+   ============================================================ */
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #f5f0e6;
+  --bg-glass: rgba(255, 255, 252, 0.92);
+  --border: #d0cbbf;
+  --text: #1c1c1c;
+  --text2: #5a5a5a;
+  --text3: #8a8a8a;
+  --accent: #0969da;
+  --green: #3fb950;
+  --orange: #d29922;
+  --red: #f85149;
+  --radius: 8px;
+}
+
+html, body, #app {
+  width: 100%; height: 100%; overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: var(--bg); color: var(--text);
+}
+
+/* Layout */
+.app-layout { width: 100%; height: 100%; }
+.viewport-wrap { width: 100%; height: 100%; position: relative; }
+.viewport { width: 100%; height: 100%; position: relative; }
+
+/* Top bar */
+.top-bar {
+  position: absolute; top: 0; left: 0; right: 0;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 16px;
+  background: linear-gradient(to bottom, rgba(245,240,230,0.95), transparent);
+  pointer-events: none; z-index: 10;
+}
+.tb-left { display: flex; align-items: center; gap: 10px; }
+.tb-title { font-size: 14px; font-weight: 600; }
+.tb-host { font-size: 12px; color: var(--text2); padding: 2px 8px;
+  background: rgba(88,166,255,0.1); border-radius: 10px; }
+.conn-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--red);
+}
+.conn-dot.ok { background: var(--green); animation: pulse 2s infinite; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+.tb-status {
+  font-size: 11px; font-weight: 700; letter-spacing: 1px;
+  color: var(--red); padding: 3px 10px;
+  border: 1px solid rgba(200,50,50,0.3); border-radius: 12px;
+  background: rgba(200,50,50,0.06);
+}
+.tb-status.ok {
+  color: var(--green);
+  border-color: rgba(30,140,50,0.3);
+  background: rgba(30,140,50,0.06);
+}
+
+/* Error overlay */
+.error-overlay {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+  text-align: center; padding: 24px 32px;
+  background: var(--bg-glass); border: 1px solid var(--border);
+  border-radius: 12px; z-index: 20;
+}
+.error-overlay p { font-size: 14px; color: var(--red); }
+.error-overlay .hint { font-size: 12px; color: var(--text3); margin-top: 8px; }
+
+/* Metrics HUD */
+.metrics-hud {
+  position: absolute; bottom: 16px; left: 16px;
+  background: var(--bg-glass); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 12px 16px;
+  min-width: 260px; z-index: 10;
+  backdrop-filter: blur(8px);
+}
+.hud-row {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 6px;
+}
+.hud-row:last-child { margin-bottom: 0; }
+.hud-label {
+  font-size: 11px; font-weight: 600; color: var(--text2);
+  min-width: 32px;
+}
+.hud-bar {
+  flex: 1; height: 5px; background: rgba(0,0,0,0.08);
+  border-radius: 3px; overflow: hidden;
+}
+.hud-fill {
+  height: 100%; border-radius: 3px;
+  background: var(--green); transition: width 0.6s ease;
+}
+.hud-fill.warn { background: var(--orange); }
+.hud-fill.crit { background: var(--red); }
+.hud-fill.gpu { background: #7c4dff; }
+.hud-fill.gpu.warn { background: var(--orange); }
+.hud-fill.gpu.crit { background: var(--red); }
+.hud-fill.ram { background: #2196f3; }
+.hud-fill.ram.warn { background: var(--orange); }
+.hud-fill.ram.crit { background: var(--red); }
+.hud-val { font-size: 11px; color: var(--text); min-width: 55px; text-align: right; }
+
+.hud-net { display: flex; gap: 8px; align-items: baseline; }
+.net-down { color: var(--green); font-size: 12px; font-weight: 600; }
+.net-up { color: var(--accent); font-size: 12px; font-weight: 600; }
+.net-unit { color: var(--text3); font-size: 10px; }
+
+/* Bus legend */
+.bus-legend {
+  position: absolute; bottom: 16px; right: 16px;
+  display: flex; gap: 10px; padding: 8px 14px;
+  background: var(--bg-glass); border: 1px solid var(--border);
+  border-radius: var(--radius); z-index: 10;
+  backdrop-filter: blur(8px);
+}
+.bl-item { display: flex; align-items: center; gap: 4px; font-size: 10px; color: var(--text2); }
+.bl-dot { width: 12px; height: 3px; border-radius: 2px; display: inline-block; }
+.bl-dot.ddr { background: #42a5f5; }
+.bl-dot.pcie16 { background: #66bb6a; }
+.bl-dot.pcie4 { background: #26c6da; }
+.bl-dot.nvlink { background: #ab47bc; }
+.bl-dot.dmi { background: #ffa726; }
+
+/* CSS2D Labels in 3D scene */
+.topo-label {
+  text-align: center; pointer-events: none;
+  padding: 4px 10px; border-radius: 6px;
+  background: rgba(255,255,252,0.92);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(4px);
+}
+.topo-label .tl-name { font-size: 11px; font-weight: 600; color: var(--text); white-space: nowrap; }
+.topo-label .tl-sub { font-size: 9px; color: var(--text2); white-space: nowrap; margin-top: 2px; }
+
+.topo-label.cpu-label { border-color: rgba(80,80,80,0.25); }
+.topo-label.cpu-label .tl-name { color: #37474f; }
+.topo-label.ram-label { border-color: rgba(25,118,210,0.3); }
+.topo-label.ram-label .tl-name { color: #1565c0; }
+.topo-label.gpu-label { border-color: rgba(46,125,50,0.3); }
+.topo-label.gpu-label .tl-name { color: #2e7d32; }
+.topo-label.storage-label { border-color: rgba(0,137,123,0.3); }
+.topo-label.storage-label .tl-name { color: #00695c; }
+.topo-label.pch-label { border-color: rgba(230,130,0,0.3); }
+.topo-label.pch-label .tl-name { color: #e65100; }
+.topo-label.nic-label { border-color: rgba(69,90,100,0.3); }
+.topo-label.nic-label .tl-name { color: #37474f; }
+
+/* CPU alarm blink animation */
+@keyframes alarm-flash {
+  0%, 100% { opacity: 1; color: #cc0000; text-shadow: 0 0 6px rgba(255,0,0,0.5); }
+  50% { opacity: 0.5; color: #dd4400; text-shadow: 0 0 3px rgba(255,68,0,0.4); }
+}
+.alarm-blink {
+  animation: alarm-flash 0.5s ease-in-out infinite !important;
+}
+.alarm-blink .tl-name,
+.alarm-blink .tl-sub {
+  color: inherit !important;
+}

@@ -1,0 +1,36 @@
+{
+  "host_type": "inference_server",
+  "label": "vLLM Inference Node",
+  "cpu": {
+    "id": "cpu0",
+    "model": "EPYC 9454",
+    "cores": 48,
+    "tdp_w": 360
+  },
+  "memory": {
+    "channels": 8,
+    "type": "DDR5",
+    "sticks": [
+      { "slot": "DIMM_A0", "size_gb": 64, "freq_mhz": 4800 },
+      { "slot": "DIMM_A1", "size_gb": 64, "freq_mhz": 4800 },
+      { "slot": "DIMM_B0", "size_gb": 64, "freq_mhz": 4800 },
+      { "slot": "DIMM_B1", "size_gb": 64, "freq_mhz": 4800 }
+    ]
+  },
+  "gpu": [
+    { "id": "gpu0", "slot": "PCIe_x16_0", "model": "H100 80GB", "vram_gb": 80, "tdp_w": 700 },
+    { "id": "gpu1", "slot": "PCIe_x16_1", "model": "H100 80GB", "vram_gb": 80, "tdp_w": 700 },
+    { "id": "gpu2", "slot": "PCIe_x16_2", "model": "H100 80GB", "vram_gb": 80, "tdp_w": 700 },
+    { "id": "gpu3", "slot": "PCIe_x16_3", "model": "H100 80GB", "vram_gb": 80, "tdp_w": 700 }
+  ],
+  "storage": [
+    { "id": "nvme0", "interface": "M2_PCIe4x4", "model": "PM9A3 3.84TB", "capacity_tb": 3.84, "via": "cpu" }
+  ],
+  "network": [
+    { "id": "nic0", "interface": "100GbE", "model": "ConnectX-7", "via": "pcie" }
+  ],
+  "pch": null,
+  "interconnects": [
+    { "type": "NVLink", "peers": ["gpu0", "gpu1", "gpu2", "gpu3"], "bandwidth_gbps": 900 }
+  ]
+}

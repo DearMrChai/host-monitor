@@ -1,0 +1,20 @@
+{
+  "name": "host-monitor-client",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "LAN Host Monitor - 3D Digital Twin Dashboard (Vue 3 + Three.js)",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "three": "^0.170.0",
+    "vue": "^3.5.12"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.1.4",
+    "vite": "^5.4.8"
+  }
+}
