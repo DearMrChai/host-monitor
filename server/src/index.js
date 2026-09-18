@@ -10,7 +10,9 @@
  */
 import express from 'express';
 import cors from 'cors';
-import { readFileSync } from 'fs';
+import { readFileSync, existsSync } from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { createServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { store } from './store.js';
@@ -119,6 +121,18 @@ app.get('/api/alerts/history', (req, res) => {
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', uptime: process.uptime() });
 });
+
+// Production hosting: serve the built client (client/dist) so the whole
+// dashboard is available at http://<server>:9101 without vite. Dev mode
+// (vite on 5173 + /api proxy) is unaffected when dist/ is absent.
+const distDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'client', 'dist');
+if (existsSync(path.join(distDir, 'index.html'))) {
+  app.use(express.static(distDir));
+  app.get('/', (req, res) => res.sendFile(path.join(distDir, 'index.html')));
+  console.log('[Server] Serving client build from client/dist (open http://<this-host>:9101)');
+} else {
+  console.log('[Server] client/dist not found - API only (use vite dev server for UI)');
+}
 
 const clientServer = createServer(app);
 const clientWss = new WebSocketServer({ server: clientServer });
