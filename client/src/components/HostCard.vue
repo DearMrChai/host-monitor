@@ -43,12 +43,15 @@ const reasons = computed(() => {
 
 const linkLevel = computed(() => comp.value.link?.level || null)
 const uptime = computed(() => formatUptime(m.value?.system?.uptime_seconds))
+const pending = computed(() => props.host.status?.pending || [])
 </script>
 
 <template>
   <div class="host-card" :class="'lv-' + level.toLowerCase()" @click="$emit('open', host.host_id)">
     <div class="hc-head">
       <span class="hc-name">{{ host.hostname || host.host_id }}</span>
+      <span class="hc-pending" v-if="pending.length"
+            :title="'观察中: ' + pending.map(p => p.metric).join(', ')">观察中</span>
       <span class="hc-role">{{ ROLE_LABELS[host.role] || host.role || '其他' }}</span>
     </div>
 
@@ -95,6 +98,10 @@ const uptime = computed(() => formatUptime(m.value?.system?.uptime_seconds))
 .hc-role {
   font-size: 10px; color: var(--text2); padding: 1px 8px; flex-shrink: 0;
   border: 1px solid var(--border); border-radius: 9px; background: rgba(0,0,0,.03);
+}
+.hc-pending {
+  font-size: 10px; color: #9a6700; flex-shrink: 0; margin-left: auto;
+  background: rgba(210,153,34,.12); border-radius: 9px; padding: 1px 7px;
 }
 
 .hc-link { font-size: 11px; color: var(--text3); display: flex; align-items: center; gap: 6px; }

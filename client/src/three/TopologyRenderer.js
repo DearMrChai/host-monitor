@@ -838,7 +838,7 @@ export class TopologyRenderer {
 
   /* ---------- Real-time metrics ---------- */
 
-  updateMetrics(metrics) {
+  updateMetrics(metrics, alarmOverride) {
     if (!metrics) return
     this._metrics = metrics
 
@@ -851,8 +851,8 @@ export class TopologyRenderer {
       const tempNorm = temp != null ? Math.min(Math.max((temp - 30) / 70, 0), 1) * 100 : null
       const effective = tempNorm != null ? (usage * 0.4 + tempNorm * 0.6) : usage
       const color = this._loadColor(effective)
-      // Alarm threshold: usage > 90% OR temp > 85°C
-      const isAlarm = usage > 90 || (temp != null && temp > 85)
+      // Alarm: debounced node status when provided (P2), else local instant thresholds
+      const isAlarm = alarmOverride != null ? alarmOverride : (usage > 90 || (temp != null && temp > 85))
       if (isAlarm) {
         cpuComp._alarmPhase += 0.18
         const blink = (Math.sin(cpuComp._alarmPhase * 6) + 1) / 2

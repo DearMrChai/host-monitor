@@ -1,41 +1,68 @@
 <script setup>
-import { computed } from 'vue'
-import { hostLevel, LEVEL_RANK, STATUS_TEXT, formatReason } from '../lib/status.js'
+import { computed, ref, onUnmounted } from 'vue'
+import { LEVEL_RANK, STATUS_TEXT, METRIC_LABELS } from '../lib/status.js'
 
-const props = defineProps({ hosts: { type: Array, default: () => [] } })
+/* P2: driven by the debounced alert engine (active + resolved window),
+   no longer by instantaneous reasons. */
+
+const props = defineProps({
+  alerts: { type: Object, default: () => ({ active: [], resolved: [] }) },
+})
 const emit = defineEmits(['open'])
 
-// P1 placeholder: derived directly from instantaneous four-state reasons.
-// Full alert lifecycle (debounce/history) arrives with P2.
-const alerting = computed(() =>
-  props.hosts
-    .filter(h => hostLevel(h) !== 'OK')
-    .sort((a, b) => LEVEL_RANK[hostLevel(b)] - LEVEL_RANK[hostLevel(a)])
-    .map(h => ({
-      host: h,
-      level: hostLevel(h),
-      reason: [...(h.status?.reasons || [])]
-        .sort((x, y) => LEVEL_RANK[y.level] - LEVEL_RANK[x.level])[0],
-    })),
-)
+const now = ref(Date.now())
+const timer = setInterval(() => { now.value = Date.now() }, 1000)
+onUnmounted(() => clearInterval(timer))
+
+const active = computed(() => props.alerts.active || [])
+const resolved = computed(() => props.alerts.resolved || [])
+
+function duration(a) {
+  if (!a.started_at) return ''
+  const end = a.resolved_at || now.value
+  const s = Math.max(0, Math.floor((end - a.started_at) / 1000))
+  if (s < 60) return `${s}s`
+  if (s < 3600) return `${Math.floor(s / 60)}m${s % 60 ? (s % 60) + 's' : ''}`
+  return `${Math.floor(s / 3600)}h${Math.floor((s % 3600) / 60)}m`
+}
+
+function metricText(a) {
+  const label = METRIC_LABELS[a.metric] || a.metric
+  const source = a.source && !['cpu', 'mem', 'heartbeat'].includes(a.source) ? ` ${a.source}` : ''
+  const unit = a.metric.endsWith('temp') ? '°C' : a.metric === 'offline' ? 's' : '%'
+  return `${label}${source} ${a.latest_value}${unit}（阈值 ${a.threshold}）`
+}
 </script>
 
 <template>
   <aside class="alert-panel">
-    <div class="ap-title">活动告警 <span class="ap-count">{{ alerting.length }}</span></div>
-    <div v-if="!alerting.length" class="ap-empty">✓ 无活动告警</div>
+    <div class="ap-title">活动告警 <span class="ap-count">{{ active.length }}</span></div>
+    <div v-if="!active.length" class="ap-empty">✓ 无活动告警</div>
     <div v-else>
-      <div class="ap-item" v-for="a in alerting" :key="a.host.host_id"
-           :class="a.level.toLowerCase()" @click="emit('open', a.host.host_id)">
+      <div class="ap-item" v-for="a in active" :key="a.id"
+           :class="a.level.toLowerCase()" @click="emit('open', a.host_id)">
         <span class="ap-dot" />
         <div class="ap-body">
-          <div class="ap-name">{{ a.host.hostname || a.host.host_id }}
-            <em>{{ STATUS_TEXT[a.level] }}</em></div>
-          <div class="ap-reason" v-if="a.reason">{{ formatReason(a.reason) }}</div>
+          <div class="ap-name">{{ a.hostname }}
+            <em>{{ STATUS_TEXT[a.level] }}</em>
+            <span class="ap-dur">{{ duration(a) }}</span>
+          </div>
+          <div class="ap-reason">{{ metricText(a) }}</div>
         </div>
       </div>
     </div>
-    <div class="ap-note">告警防抖与历史由 P2 补全</div>
+
+    <details v-if="resolved.length" class="ap-resolved">
+      <summary>最近恢复 ({{ resolved.length }})</summary>
+      <div class="ap-item done" v-for="a in resolved" :key="a.id"
+           :class="a.level.toLowerCase()">
+        <span class="ap-dot" />
+        <div class="ap-body">
+          <div class="ap-name">{{ a.hostname }} <em>已恢复 · {{ duration(a) }}</em></div>
+          <div class="ap-reason">{{ metricText(a) }}</div>
+        </div>
+      </div>
+    </details>
   </aside>
 </template>
 
@@ -55,12 +82,15 @@ const alerting = computed(() =>
   border: 1px solid transparent;
 }
 .ap-item:hover { background: rgba(0,0,0,.03); border-color: var(--border); }
+.ap-item.done { cursor: default; opacity: .7; }
 .ap-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 4px; flex-shrink: 0; background: var(--green); }
 .ap-item.warn .ap-dot { background: var(--orange); }
 .ap-item.crit .ap-dot { background: var(--red); }
 .ap-item.offline .ap-dot { background: var(--text3); }
-.ap-name { font-size: 12px; font-weight: 600; }
-.ap-name em { font-style: normal; font-size: 10px; color: var(--text2); margin-left: 4px; }
+.ap-name { font-size: 12px; font-weight: 600; display: flex; align-items: baseline; gap: 4px; }
+.ap-name em { font-style: normal; font-size: 10px; color: var(--text2); font-weight: 400; }
+.ap-dur { margin-left: auto; font-size: 10px; color: var(--text3); font-weight: 400; }
 .ap-reason { font-size: 11px; color: var(--text2); margin-top: 2px; }
-.ap-note { margin-top: auto; font-size: 10px; color: var(--text3); }
+.ap-resolved { border-top: 1px dashed var(--border); padding-top: 6px; }
+.ap-resolved summary { font-size: 11px; color: var(--text3); cursor: pointer; }
 </style>

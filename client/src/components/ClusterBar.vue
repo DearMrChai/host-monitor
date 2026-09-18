@@ -1,11 +1,18 @@
 <script setup>
 import { computed } from 'vue'
 import { STATUS_TEXT } from '../lib/status.js'
+import { sound, toggleMute, unlock } from '../lib/sound.js'
 
 const props = defineProps({
   cluster: { type: Object, default: null },
   connected: { type: Boolean, default: false },
 })
+
+function onBell() {
+  unlock()
+  if (!sound.unlocked) return
+  toggleMute()
+}
 
 const health = computed(() => props.cluster?.health || 'OFFLINE')
 const healthClass = computed(() => health.value.toLowerCase())
@@ -46,6 +53,11 @@ const bars = computed(() => {
         </span>
         <span class="agg-val na" v-else>—</span>
       </span>
+    </div>
+    <div class="cb-sound">
+      <span v-if="!sound.unlocked" class="unlock-hint" @click="onBell">点击激活声音</span>
+      <button class="bell" :class="{ muted: sound.muted }" :title="sound.muted ? '取消静音' : '静音'"
+              @click="onBell">{{ sound.muted ? '🔇' : '🔊' }}</button>
     </div>
   </header>
 </template>
@@ -90,4 +102,11 @@ const bars = computed(() => {
 .agg-val { font-size: 11px; min-width: 62px; }
 .agg-val.na { color: var(--text3); }
 .agg-val em { font-style: normal; color: var(--text3); }
+.cb-sound { display: flex; align-items: center; gap: 8px; }
+.unlock-hint { font-size: 11px; color: var(--accent); cursor: pointer; }
+.bell {
+  border: 1px solid var(--border); background: var(--bg-glass);
+  border-radius: 14px; font-size: 13px; padding: 3px 9px; cursor: pointer;
+}
+.bell.muted { opacity: .55; }
 </style>

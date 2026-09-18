@@ -1,6 +1,7 @@
 <script setup>
 import { computed } from 'vue'
 import ClusterBar from '../components/ClusterBar.vue'
+import AlertBanner from '../components/AlertBanner.vue'
 import HostCard from '../components/HostCard.vue'
 import AlertPanel from '../components/AlertPanel.vue'
 import { sortHostsForOverview } from '../lib/status.js'
@@ -8,6 +9,7 @@ import { sortHostsForOverview } from '../lib/status.js'
 const props = defineProps({
   hosts: { type: Array, default: () => [] },
   cluster: { type: Object, default: null },
+  alerts: { type: Object, default: () => ({ active: [], resolved: [] }) },
   connected: { type: Boolean, default: false },
 })
 defineEmits(['open'])
@@ -18,6 +20,7 @@ const sorted = computed(() => sortHostsForOverview(props.hosts))
 <template>
   <div class="overview">
     <ClusterBar :cluster="cluster" :connected="connected" />
+    <AlertBanner :alerts="alerts.active || []" @open="id => $emit('open', id)" />
     <div class="ov-body">
       <main class="ov-grid">
         <div v-if="!sorted.length" class="ov-empty">
@@ -26,13 +29,13 @@ const sorted = computed(() => sortHostsForOverview(props.hosts))
         <HostCard v-for="h in sorted" :key="h.host_id" :host="h"
                   @open="id => $emit('open', id)" />
       </main>
-      <AlertPanel class="ov-alerts" :hosts="hosts" @open="id => $emit('open', id)" />
+      <AlertPanel class="ov-alerts" :alerts="alerts" @open="id => $emit('open', id)" />
     </div>
   </div>
 </template>
 
 <style scoped>
-.overview { height: 100%; display: flex; flex-direction: column; overflow: hidden; }
+.overview { height: 100%; display: flex; flex-direction: column; overflow: hidden; position: relative; }
 .ov-body {
   flex: 1; display: grid; grid-template-columns: 1fr 260px;
   gap: 14px; padding: 14px; overflow: auto;

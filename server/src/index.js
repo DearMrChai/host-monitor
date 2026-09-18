@@ -83,6 +83,10 @@ app.get('/api/hosts', (req, res) => {
   res.json({ hosts, cluster: evaluateCluster(hosts) });
 });
 
+app.get('/api/alerts', (req, res) => {
+  res.json(store.getSnapshot().alerts);
+});
+
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', uptime: process.uptime() });
 });

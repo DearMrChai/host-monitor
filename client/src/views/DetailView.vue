@@ -89,6 +89,10 @@ const comp = () => props.host?.status?.components || {}
 
 /* ---------- Host updates ---------- */
 
+function alarmOverride(host) {
+  return host?.status ? host.status.level === 'CRIT' : undefined
+}
+
 watch(() => props.host, (host) => {
   if (!host) return
   hostName.value = host.hostname || host.host_id
@@ -99,7 +103,7 @@ watch(() => props.host, (host) => {
     buildScene(newTopo)
   }
   if (host.metrics && renderer) {
-    renderer.updateMetrics(host.metrics)
+    renderer.updateMetrics(host.metrics, alarmOverride(host))
   }
 })
 
@@ -110,7 +114,7 @@ onMounted(() => {
     const topo = buildTopologyFromMetrics(props.host)
     topology.value = topo
     buildScene(topo)
-    if (props.host.metrics) renderer?.updateMetrics(props.host.metrics)
+    if (props.host.metrics) renderer?.updateMetrics(props.host.metrics, alarmOverride(props.host))
   }
 })
 

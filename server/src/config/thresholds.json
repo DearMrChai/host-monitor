@@ -6,5 +6,11 @@
   "gpu_temp":   { "warn": 80, "crit": 93 },
   "rtt_ms":     { "warn": 5,  "crit": 50 },
   "packet_loss":{ "warn": 1,  "crit": 5 },
-  "offline_seconds": 15
+  "offline_seconds": 15,
+  "alert": {
+    "debounce_cycles": 3,
+    "resolved_keep_minutes": 5,
+    "history_capacity": 200,
+    "tick_ms": 1800
+  }
 }

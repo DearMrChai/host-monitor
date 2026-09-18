@@ -3,6 +3,7 @@
  * Tracks connected hosts, their topology, latest metrics, and online status.
  */
 import { evaluateHost, evaluateCluster, thresholds } from './status.js';
+import { alertEngine } from './alerts.js';
 
 const OFFLINE_TIMEOUT_MS = 15_000;
 
@@ -76,12 +77,13 @@ class MonitorStore {
   }
 
   /**
-   * Annotated hosts: each host carries its derived four-state `status`.
+   * Annotated hosts: instant four-state, then debounced by the alert engine.
    */
   getAnnotatedHosts() {
     this.checkTimeouts();
     const hosts = this.getAllHosts();
     for (const host of hosts) host.status = evaluateHost(host);
+    alertEngine.tick(hosts);
     return hosts;
   }
 
@@ -91,6 +93,7 @@ class MonitorStore {
       type: 'snapshot',
       timestamp: Date.now(),
       cluster: evaluateCluster(hosts),
+      alerts: alertEngine.getLists(),
       thresholds,
       hosts,
     };

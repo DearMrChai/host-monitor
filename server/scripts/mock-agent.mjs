@@ -69,6 +69,27 @@ const MOCKS = [
     host_id: 'mock-silent', hostname: 'mock-silent', role: 'db', silent: true,
     frame: () => frame('mock-silent', 'mock-silent', 12, 30, [], [{ m: 'C:', t: 200, p: 22 }]),
   },
+  {
+    // bursts of 2 frames over the CPU WARN threshold (80) then 2 under:
+    // never reaches the 3-cycle debounce window, must NOT fire
+    host_id: 'mock-flap', hostname: 'mock-flap', role: 'laptop', silent: false,
+    _n: 0,
+    frame: () => {
+      const f = MOCKS[3]
+      f._n = (f._n + 1) % 4
+      const usage = f._n < 2 ? 84 : 76
+      return frame('mock-flap', 'mock-flap', usage, 35, [], [{ m: 'C:', t: 256, p: 30 }])
+    },
+  },
+  {
+    // sustained disk 96% -> CRIT after the debounce window, crit sound loop path
+    host_id: 'mock-crit', hostname: 'mock-crit', role: 'display', silent: false,
+    frame: () => {
+      const f = frame('mock-crit', 'mock-crit', 18, 44, [], [{ m: 'C:', t: 119, p: 96 }])
+      f.disk.worst_percent = 96
+      return f
+    },
+  },
 ]
 
 const ws = new WebSocket(SERVER)
