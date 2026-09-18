@@ -1,0 +1,135 @@
+/**
+ * Four-state derivation (P1): component metrics -> node status -> cluster health.
+ * Contract defined in P1-细化设计.md §1.2. Evaluation is per-frame instantaneous;
+ * debouncing/alert lifecycle belongs to P2 and is NOT implemented here.
+ */
+import { readFileSync } from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+export const thresholds = JSON.parse(
+  readFileSync(path.join(__dirname, 'config', 'thresholds.json'), 'utf8'),
+);
+
+const RANK = { OK: 0, WARN: 1, CRIT: 2, OFFLINE: 3 };
+
+export function worstLevel(...levels) {
+  let worst = null;
+  for (const l of levels) {
+    if (!l) continue;
+    if (worst === null || RANK[l] > RANK[worst]) worst = l;
+  }
+  return worst;
+}
+
+function levelFor(value, th) {
+  if (value == null || Number.isNaN(value)) return null;
+  if (value > th.crit) return 'CRIT';
+  if (value > th.warn) return 'WARN';
+  return 'OK';
+}
+
+function pushReason(reasons, metric, source, value, th, level) {
+  if (!level || level === 'OK') return;
+  reasons.push({ metric, source, value, threshold: level === 'CRIT' ? th.crit : th.warn, level });
+}
+
+export function evaluateHost(host) {
+  const components = {
+    cpu: { level: null, usage: null, temperature: null },
+    mem: { level: null, percent: null },
+    disk: { level: null, worst_percent: null, worst_mount: null },
+    gpu: [],
+    link: { level: null }, // no probe data until P3
+  };
+  const reasons = [];
+
+  if (!host.online) {
+    const offlineSec = Math.round((Date.now() - host.lastSeen) / 1000);
+    reasons.push({
+      metric: 'offline', source: 'heartbeat', value: offlineSec,
+      threshold: thresholds.offline_seconds, level: 'OFFLINE',
+    });
+    return { level: 'OFFLINE', components, reasons };
+  }
+
+  const m = host.metrics;
+  if (m) {
+    // CPU: usage + temperature, worst of the two
+    if (m.cpu) {
+      const lu = levelFor(m.cpu.usage_percent, thresholds.cpu_usage);
+      const lt = levelFor(m.cpu.temperature_c, thresholds.cpu_temp);
+      components.cpu = {
+        level: worstLevel(lu, lt),
+        usage: m.cpu.usage_percent ?? null,
+        temperature: m.cpu.temperature_c ?? null,
+      };
+      pushReason(reasons, 'cpu_usage', 'cpu', m.cpu.usage_percent, thresholds.cpu_usage, lu);
+      pushReason(reasons, 'cpu_temp', 'cpu', m.cpu.temperature_c, thresholds.cpu_temp, lt);
+    }
+
+    // Memory (pooled percent only, per design §1.3)
+    if (m.memory) {
+      const l = levelFor(m.memory.percent, thresholds.mem);
+      components.mem = { level: l, percent: m.memory.percent ?? null };
+      pushReason(reasons, 'mem', 'mem', m.memory.percent, thresholds.mem, l);
+    }
+
+    // Disk: worst fixed partition
+    if (m.disk?.partitions?.length) {
+      const worst = m.disk.partitions.reduce((a, b) =>
+        (b.percent > a.percent ? b : a));
+      const l = levelFor(worst.percent, thresholds.disk);
+      components.disk = { level: l, worst_percent: worst.percent, worst_mount: worst.mountpoint };
+      pushReason(reasons, 'disk', worst.mountpoint, worst.percent, thresholds.disk, l);
+    }
+
+    // GPU: per-card temperature (thresholds per design §2.2 are temp-only)
+    for (const g of m.gpu || []) {
+      const l = levelFor(g.temperature_c, thresholds.gpu_temp);
+      components.gpu.push({
+        id: `gpu${g.index ?? 0}`, level: l,
+        usage: g.usage_percent ?? null, temperature: g.temperature_c ?? null,
+      });
+      pushReason(reasons, 'gpu_temp', `gpu${g.index ?? 0}`, g.temperature_c, thresholds.gpu_temp, l);
+    }
+  }
+
+  const level = worstLevel(
+    components.cpu.level, components.mem.level, components.disk.level,
+    ...components.gpu.map((g) => g.level),
+  ) || 'OK';
+
+  return { level, components, reasons };
+}
+
+function avg(nums) {
+  const valid = nums.filter((n) => n != null && !Number.isNaN(n));
+  if (!valid.length) return null;
+  return Math.round(valid.reduce((a, b) => a + b, 0) / valid.length);
+}
+
+function peak(nums) {
+  const valid = nums.filter((n) => n != null && !Number.isNaN(n));
+  return valid.length ? Math.round(Math.max(...valid)) : null;
+}
+
+export function evaluateCluster(hosts) {
+  const online = hosts.filter((h) => h.online);
+  const gpusOf = (h) => (h.metrics?.gpu || []);
+
+  return {
+    health: worstLevel(...hosts.map((h) => h.status?.level)) || 'OK',
+    online: online.length,
+    total: hosts.length,
+    aggregate: {
+      cpu: { avg: avg(online.map((h) => h.metrics?.cpu?.usage_percent)),
+             peak: peak(online.map((h) => h.metrics?.cpu?.usage_percent)) },
+      mem: { avg: avg(online.map((h) => h.metrics?.memory?.percent)),
+             peak: peak(online.map((h) => h.metrics?.memory?.percent)) },
+      gpu: { avg: avg(online.flatMap(gpusOf).map((g) => g.usage_percent)),
+             peak: peak(online.flatMap(gpusOf).map((g) => g.usage_percent)) },
+    },
+  };
+}

@@ -13,6 +13,7 @@ import cors from 'cors';
 import { createServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { store } from './store.js';
+import { evaluateCluster } from './status.js';
 
 const AGENT_PORT = 9100;
 const CLIENT_PORT = 9101;
@@ -38,9 +39,10 @@ agentWss.on('connection', (ws, req) => {
         store.register(hostId, {
           hostname: msg.hostname,
           platform: msg.platform,
+          role: msg.role,
           topology: msg.topology,  // Pass topology through
         });
-        console.log(`[Server] Agent registered: ${hostId} (${msg.hostname})`);
+        console.log(`[Server] Agent registered: ${hostId} (${msg.hostname}) role=${msg.role || 'other'}`);
         if (msg.topology) {
           const t = msg.topology;
           console.log(`[Server]   Topology: ${t.cpu?.model}, ` +
@@ -77,8 +79,8 @@ app.use(cors());
 app.use(express.json());
 
 app.get('/api/hosts', (req, res) => {
-  store.checkTimeouts();
-  res.json({ hosts: store.getAllHosts() });
+  const hosts = store.getAnnotatedHosts();
+  res.json({ hosts, cluster: evaluateCluster(hosts) });
 });
 
 app.get('/api/health', (req, res) => {

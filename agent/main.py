@@ -16,8 +16,10 @@ import uuid
 
 import websockets
 
-from collectors import cpu, gpu, memory, network
+from collectors import cpu, disk, gpu, memory, network, system
 from collectors.topology import detect_topology
+
+ROLES = ("db", "inference", "desktop", "laptop", "display", "other")
 
 
 def get_default_host_id():
@@ -39,6 +41,8 @@ def collect_all():
         "gpu": gpu.collect(),
         "memory": memory.collect(),
         "network": network.collect(),
+        "disk": disk.collect(),
+        "system": system.collect(),
     }
     return frame
 
@@ -70,6 +74,7 @@ async def run_agent(server_url, interval):
                     "host_id": ARGS.host_id,
                     "hostname": socket.gethostname(),
                     "platform": f"{platform.system()} {platform.release()}",
+                    "role": ARGS.role,
                     "topology": topo,
                 }))
                 print(f"[Agent] Registered with topology")
@@ -101,6 +106,8 @@ def main():
                         help="Collection interval in seconds")
     parser.add_argument("--host-id", default=None,
                         help="Custom host identifier")
+    parser.add_argument("--role", default="other", choices=ROLES,
+                        help="Node role tag (affects overview ordering)")
     ARGS = parser.parse_args()
 
     if not ARGS.host_id:

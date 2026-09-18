@@ -2,6 +2,7 @@
  * In-memory data store for host monitoring.
  * Tracks connected hosts, their topology, latest metrics, and online status.
  */
+import { evaluateHost, evaluateCluster, thresholds } from './status.js';
 
 const OFFLINE_TIMEOUT_MS = 15_000;
 
@@ -19,6 +20,7 @@ class MonitorStore {
     if (existing) {
       existing.hostname = info.hostname || existing.hostname;
       existing.platform = info.platform || existing.platform;
+      if (info.role) existing.role = info.role;
       if (info.topology) existing.topology = info.topology;
       existing.lastSeen = Date.now();
       existing.online = true;
@@ -27,6 +29,7 @@ class MonitorStore {
         host_id: hostId,
         hostname: info.hostname || hostId,
         platform: info.platform || 'unknown',
+        role: info.role || 'other',
         topology: info.topology || null,
         online: true,
         lastSeen: Date.now(),
@@ -72,12 +75,24 @@ class MonitorStore {
     return Array.from(this.hosts.values());
   }
 
-  getSnapshot() {
+  /**
+   * Annotated hosts: each host carries its derived four-state `status`.
+   */
+  getAnnotatedHosts() {
     this.checkTimeouts();
+    const hosts = this.getAllHosts();
+    for (const host of hosts) host.status = evaluateHost(host);
+    return hosts;
+  }
+
+  getSnapshot() {
+    const hosts = this.getAnnotatedHosts();
     return {
       type: 'snapshot',
       timestamp: Date.now(),
-      hosts: this.getAllHosts(),
+      cluster: evaluateCluster(hosts),
+      thresholds,
+      hosts,
     };
   }
 }
