@@ -72,6 +72,9 @@ export class TopologyRenderer {
     this.topology = topology
     this.components = new Map()
     this.links = []
+    this._pickables = []
+    this._ray = new THREE.Raycaster()
+    this._pointer = new THREE.Vector2()
     this._metrics = null
     this._clock = new THREE.Clock()
 
@@ -402,6 +405,7 @@ export class TopologyRenderer {
     group.add(label)
 
     this.scene.add(group)
+    this._registerPickable(group, 'cpu')
     this.components.set('cpu', {
       group, ihsMat, label, _alarmPhase: 0,
       pos: { ...CPU_POS }, type: 'cpu'
@@ -501,7 +505,8 @@ export class TopologyRenderer {
       group.add(label)
 
       this.scene.add(group)
-      containers.push({ fill, fillMat, label })
+      this._registerPickable(group, 'memory')
+      containers.push({ group, fill, fillMat, label })
     }
 
     const centerX = baseX + (count - 1) * spacing / 2
@@ -591,6 +596,7 @@ export class TopologyRenderer {
       group.add(label)
 
       this.scene.add(group)
+      this._registerPickable(group, gpu.id || `gpu${i}`)
       this.components.set(gpu.id, {
         group, pcbMat, shroudMat, fans, label,
         pos: { x: PCIE_START.x, z }, type: 'gpu', index: i
@@ -642,6 +648,7 @@ export class TopologyRenderer {
       group.add(label)
 
       this.scene.add(group)
+      this._registerPickable(group, st.id)
       this.components.set(st.id, { group, ssdMat, label, pos: { x, z }, type: 'storage', via: st.via || 'cpu' })
     })
   }
@@ -679,6 +686,7 @@ export class TopologyRenderer {
       group.add(label)
 
       this.scene.add(group)
+      this._registerPickable(group, nic.id)
       this.components.set(nic.id, { group, nicMat, ledMat, label, pos: { x, z }, type: 'network', via: nic.via || 'pch' })
     })
   }
@@ -836,11 +844,48 @@ export class TopologyRenderer {
     this.links.push({ group, mat: traceMat, from, to, type: busType, baseIntensity: 0.2 })
   }
 
+  /* ---------- P4: component picking ---------- */
+
+  _registerPickable(group, key) {
+    group.userData.pickKey = key
+    this._pickables.push(group)
+  }
+
+  /** cb(pickKey) on a click (not drag) that hits a registered component. */
+  enableClicks(cb) {
+    const el = this.renderer.domElement
+    let down = null
+    this._onPointerDown = (e) => { down = [e.clientX, e.clientY] }
+    this._onPointerUp = (e) => {
+      if (!down) return
+      const moved = Math.hypot(e.clientX - down[0], e.clientY - down[1])
+      down = null
+      if (moved > 5) return
+      const rect = el.getBoundingClientRect()
+      this._pointer.set(
+        ((e.clientX - rect.left) / rect.width) * 2 - 1,
+        -((e.clientY - rect.top) / rect.height) * 2 + 1,
+      )
+      this._ray.setFromCamera(this._pointer, this.camera)
+      const hits = this._ray.intersectObjects(this._pickables, true)
+      for (const h of hits) {
+        let o = h.object
+        while (o && !o.userData.pickKey) o = o.parent
+        if (o) { cb(o.userData.pickKey); return }
+      }
+    }
+    el.addEventListener('pointerdown', this._onPointerDown)
+    el.addEventListener('pointerup', this._onPointerUp)
+  }
+
   /* ---------- Real-time metrics ---------- */
 
-  updateMetrics(metrics, alarmOverride) {
+  updateMetrics(metrics, alarm) {
     if (!metrics) return
     this._metrics = metrics
+    // P4: alarm may be a component map {cpu, mem, gpu0, ..., disk} (all CRIT flags),
+    // or the legacy boolean (whole-node CRIT -> CPU blinks).
+    const map = alarm && typeof alarm === 'object' ? alarm : null
 
     // CPU - lid color driven by usage + temperature, alarm blink on critical
     const cpuComp = this.components.get('cpu')
@@ -851,15 +896,12 @@ export class TopologyRenderer {
       const tempNorm = temp != null ? Math.min(Math.max((temp - 30) / 70, 0), 1) * 100 : null
       const effective = tempNorm != null ? (usage * 0.4 + tempNorm * 0.6) : usage
       const color = this._loadColor(effective)
-      // Alarm: debounced node status when provided (P2), else local instant thresholds
-      const isAlarm = alarmOverride != null ? alarmOverride : (usage > 90 || (temp != null && temp > 85))
-      if (isAlarm) {
-        cpuComp._alarmPhase += 0.18
-        const blink = (Math.sin(cpuComp._alarmPhase * 6) + 1) / 2
-        cpuComp.ihsMat.emissive.setHex(0xff2200)
-        cpuComp.ihsMat.emissiveIntensity = 0.4 + blink * 0.6
-      } else {
-        cpuComp._alarmPhase = 0
+      // Alarm: debounced per-component CRIT flags (P4 map), else legacy boolean,
+      // else local instant thresholds. Visual blink is applied per-frame in _animate.
+      const isAlarm = map ? !!map.cpu
+        : (alarm != null ? !!alarm : (usage > 90 || (temp != null && temp > 85)))
+      cpuComp._alarm = isAlarm
+      if (!isAlarm) {
         cpuComp.ihsMat.emissive.copy(color)
         cpuComp.ihsMat.emissiveIntensity = 0.05 + (effective / 100) * 0.5
       }
@@ -875,6 +917,7 @@ export class TopologyRenderer {
     // Memory (pooled containers - both fill to the same pool usage %)
     const memComp = this.components.get('memory')
     if (memComp && metrics.memory) {
+      memComp._alarm = map ? !!map.mem : false
       const usage = metrics.memory.percent || 0
       const color = this._loadColor(usage)
       const frac = Math.max(usage / 100, 0.001)
@@ -888,8 +931,10 @@ export class TopologyRenderer {
 
     // GPU
     for (const gpu of (metrics.gpu || [])) {
+      const gkey = gpu.id || `gpu${gpu.index}`
       const comp = this.components.get(gpu.id || `gpu${gpu.index}`)
       if (!comp) continue
+      comp._alarm = map ? !!map[gkey] : false
       const usage = gpu.usage_percent || 0
       const color = this._loadColor(usage)
       comp.shroudMat.emissive.copy(color)
@@ -903,6 +948,11 @@ export class TopologyRenderer {
       const vramT = gpu.vram_total_mb ? (gpu.vram_total_mb / 1024).toFixed(0) : '?'
       const temp = gpu.temperature_c ? ` | ${gpu.temperature_c}C` : ''
       el.querySelector('.tl-sub').textContent = `${usage}% | ${vramU}/${vramT}GB${temp}`
+    }
+
+    // Storage M.2 cards blink with the node's disk CRIT flag (P4)
+    for (const comp of this.components.values()) {
+      if (comp.type === 'storage') comp._alarm = map ? !!map.disk : false
     }
 
     // Network
@@ -950,6 +1000,18 @@ export class TopologyRenderer {
   _animate() {
     this._raf = requestAnimationFrame(this._animate)
     const t = this._clock.getElapsedTime()
+    // Component-level CRIT blink (P4): red pulse over whatever updateMetrics set
+    const blink = (Math.sin(t * 6) + 1) / 2
+    for (const comp of this.components.values()) {
+      if (!comp._alarm) continue
+      const mats = comp.type === 'memory'
+        ? (comp.containers || []).map((c) => c.fillMat)
+        : [comp.ihsMat, comp.shroudMat, comp.ssdMat].filter(Boolean)
+      for (const m of mats) {
+        m.emissive.setHex(0xff2200)
+        m.emissiveIntensity = 0.4 + blink * 0.6
+      }
+    }
     // Subtle trace shimmer
     for (const link of this.links) {
       const shimmer = Math.sin(t * 1.2 + link.from.x * 0.5) * 0.04
@@ -965,6 +1027,11 @@ export class TopologyRenderer {
   dispose() {
     cancelAnimationFrame(this._raf)
     this._ro.disconnect()
+    if (this._onPointerDown) {
+      const el = this.renderer.domElement
+      el.removeEventListener('pointerdown', this._onPointerDown)
+      el.removeEventListener('pointerup', this._onPointerUp)
+    }
     this.controls.dispose()
     this.renderer.dispose()
     const el = this.renderer.domElement

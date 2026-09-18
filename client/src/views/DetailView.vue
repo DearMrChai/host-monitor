@@ -1,22 +1,32 @@
 <script setup>
-import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { TopologyRenderer } from '../three/TopologyRenderer.js'
+import HudPanel from '../components/HudPanel.vue'
+import DrawerV3 from '../components/DrawerV3.vue'
 import defaultTopology from '../config/sample-topology.json'
-import { LEVEL_RANK } from '../lib/status.js'
+import { STATUS_TEXT, ROLE_LABELS } from '../lib/status.js'
 
-/* 3D single-host detail view. P1 scope: extracted from App.vue unchanged in
-   rendering logic (double-layer HUD rework is P4). Only data input changed:
-   host object now comes from the App shell's WebSocket instead of local WS. */
+/* V2 node detail, two-layer (P4):
+   left = 3D shell (colors/blinks locate the alarm source, click -> V3 drawer)
+   right = 2D numeric HUD + per-node alerts. Levels come from the server,
+   the frontend never re-thresholds. */
 
 const props = defineProps({
   host: { type: Object, default: null },
   connected: { type: Boolean, default: false },
+  alerts: { type: Object, default: () => ({ active: [], resolved: [] }) },
+  thresholds: { type: Object, default: () => ({}) },
 })
 defineEmits(['back'])
 
 const viewport = ref(null)
 const topology = ref(defaultTopology)
 const hostName = ref('')
+const drawerSpec = ref(null)
+
+/* Client-side RTT ring per probe target (~60 frames = 2 min window, P5 will
+   replace with server history). */
+const rttHistory = ref({})
 
 let renderer = null
 
@@ -40,7 +50,7 @@ function buildTopologyFromMetrics(host) {
 
   const topo = { ...defaultTopology }
   if (metrics.cpu) {
-    topo.cpu = { ...topo.cpu, model: metrics.cpu.model || topo.cpu?.model || 'CPU', cores: metrics.cpu.cores }
+    topo.cpu = { ...topo.cpu, model: metrics.cpu.model || metrics.cpu.model_name || topo.cpu?.model || 'CPU', cores: metrics.cpu.cores }
   }
   if (metrics.memory) {
     const totalGb = metrics.memory.total_gb || 16
@@ -64,33 +74,64 @@ function buildTopologyFromMetrics(host) {
   return topo
 }
 
+/* 3D pick key -> V3 drawer spec */
+function pickToSpec(key) {
+  if (key === 'cpu') return { kind: 'cpu' }
+  if (key === 'memory') return { kind: 'mem' }
+  if (/^gpu\d+$/.test(key)) return { kind: 'gpu', key, index: Number(key.slice(3)) }
+  const t = topology.value
+  if ((t.storage || []).some(s => s.id === key)) return { kind: 'disk' }
+  if ((t.network || []).some(n => n.id === key)) return { kind: 'network' }
+  return null
+}
+
+function onPick(key) {
+  const spec = pickToSpec(key)
+  if (spec) drawerSpec.value = spec
+}
+
 function buildScene(topoData) {
   renderer?.dispose()
   renderer = null
   if (viewport.value) {
     renderer = new TopologyRenderer(viewport.value, topoData)
+    renderer.enableClicks(onPick)
   }
 }
 
-/* ---------- Four-state colors for HUD (server-derived, not re-thresholded) ---------- */
+/* ---------- Component-level CRIT map for the 3D blink (server-derived) ---------- */
 
-function worstOf(levels) {
-  return levels.filter(Boolean).reduce(
-    (a, l) => (a && LEVEL_RANK[a] >= LEVEL_RANK[l] ? a : l), null)
+const alarmMap = computed(() => {
+  const c = props.host?.status?.components
+  if (!c) return undefined
+  const map = {
+    cpu: c.cpu?.level === 'CRIT',
+    mem: c.mem?.level === 'CRIT',
+    disk: c.disk?.level === 'CRIT',
+  }
+  for (const g of c.gpu || []) map[g.id] = g.level === 'CRIT'
+  return map
+})
+
+const nodeLevel = computed(() => props.host?.status?.level ||
+  (props.host?.online ? 'OK' : 'OFFLINE'))
+
+const drawerRtt = computed(() =>
+  (drawerSpec.value?.kind === 'link' && rttHistory.value[drawerSpec.value.target]) || [])
+
+function recordRtt(host) {
+  const targets = host.status?.components?.link?.targets || []
+  for (const t of targets) {
+    if (t.rtt_ms == null) continue
+    const arr = rttHistory.value[t.target] || (rttHistory.value[t.target] = [])
+    arr.push(t.rtt_ms)
+    if (arr.length > 120) arr.splice(0, arr.length - 120)
+  }
 }
 
-function hudClass(level) {
-  if (level === 'CRIT') return 'crit'
-  if (level === 'WARN') return 'warn'
-  return ''
-}
-
-const comp = () => props.host?.status?.components || {}
-
-/* ---------- Host updates ---------- */
-
-function alarmOverride(host) {
-  return host?.status ? host.status.level === 'CRIT' : undefined
+function sync3D(host) {
+  if (!renderer || !host?.metrics || !host.online) return
+  renderer.updateMetrics(host.metrics, alarmMap.value)
 }
 
 watch(() => props.host, (host) => {
@@ -102,20 +143,17 @@ watch(() => props.host, (host) => {
     topology.value = newTopo
     buildScene(newTopo)
   }
-  if (host.metrics && renderer) {
-    renderer.updateMetrics(host.metrics, alarmOverride(host))
-  }
+  sync3D(host)
+  if (host.online) recordRtt(host)
 })
 
 onMounted(() => {
-  buildScene(topology.value)
   if (props.host) {
     hostName.value = props.host.hostname || props.host.host_id
-    const topo = buildTopologyFromMetrics(props.host)
-    topology.value = topo
-    buildScene(topo)
-    if (props.host.metrics) renderer?.updateMetrics(props.host.metrics, alarmOverride(props.host))
+    topology.value = buildTopologyFromMetrics(props.host)
   }
+  buildScene(topology.value)
+  sync3D(props.host)
 })
 
 onBeforeUnmount(() => {
@@ -125,93 +163,62 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="app-layout">
-    <div class="viewport-wrap">
-      <div ref="viewport" class="viewport" />
+  <div class="app-layout detail-v2">
+    <div class="detail-main">
+      <div class="viewport-wrap" :class="{ offline: host && !host.online }">
+        <div ref="viewport" class="viewport" />
 
-      <!-- Top bar -->
-      <header class="top-bar">
-        <div class="tb-left">
-          <button class="back-btn" @click="$emit('back')">← 总览</button>
-          <span class="conn-dot" :class="{ ok: connected }" />
-          <span class="tb-title">Host Monitor</span>
-          <span class="tb-host" v-if="hostName">{{ hostName }}</span>
-          <span class="tb-type" v-if="host?.topology?.host_type">
-            {{ host.topology.host_type }}
-          </span>
-        </div>
-        <div class="tb-right">
-          <span class="tb-status" :class="{ ok: connected }">
-            {{ connected ? 'LIVE' : 'OFFLINE' }}
-          </span>
-        </div>
-      </header>
+        <header class="top-bar">
+          <div class="tb-left">
+            <button class="back-btn" @click="$emit('back')">← 总览</button>
+            <span class="conn-dot" :class="{ ok: connected }" />
+            <span class="tb-title">Host Monitor</span>
+            <span class="tb-host" v-if="hostName">{{ hostName }}</span>
+            <span class="tb-role" v-if="host?.role">{{ ROLE_LABELS[host.role] || host.role }}</span>
+            <span class="tb-nodelevel" :class="nodeLevel.toLowerCase()">
+              {{ STATUS_TEXT[nodeLevel] }}
+            </span>
+          </div>
+          <div class="tb-right">
+            <button class="back-btn" v-if="host" @click="drawerSpec = { kind: 'system' }">系统信息</button>
+            <span class="tb-status" :class="{ ok: connected }">
+              {{ connected ? 'LIVE' : 'OFFLINE' }}
+            </span>
+          </div>
+        </header>
 
-      <!-- Node lost -->
-      <div v-if="!host" class="error-overlay">
-        <p>节点已丢失</p>
-        <p class="hint">该节点不在当前集群列表中</p>
+        <div v-if="!host" class="error-overlay">
+          <p>节点已丢失</p>
+          <p class="hint">该节点不在当前集群列表中</p>
+        </div>
+        <div v-else-if="!host.online" class="offline-note">
+          节点失联{{ host.lastSeen ? ' · 最后上报 ' + new Date(host.lastSeen).toLocaleTimeString() : '' }}
+        </div>
+
+        <div class="bus-legend">
+          <span class="bl-item"><i class="bl-dot ddr" />DDR</span>
+          <span class="bl-item"><i class="bl-dot pcie16" />PCIe x16</span>
+          <span class="bl-item"><i class="bl-dot pcie4" />PCIe x4</span>
+          <span class="bl-item"><i class="bl-dot nvlink" />NVLink</span>
+          <span class="bl-item"><i class="bl-dot dmi" />DMI</span>
+        </div>
+
+        <DrawerV3 v-if="host && drawerSpec" :host="host" :spec="drawerSpec"
+                  :thresholds="thresholds" :rtt-history="drawerRtt"
+                  @close="drawerSpec = null" />
       </div>
 
-      <!-- Metrics HUD -->
-      <div class="metrics-hud" v-if="host?.metrics && host?.online">
-        <div class="hud-title">{{ host.metrics.cpu?.model || hostName }}</div>
-        <div class="hud-row">
-          <span class="hud-label">CPU</span>
-          <div class="hud-bar">
-            <div class="hud-fill" :style="{ width: (host.metrics.cpu?.usage_percent || 0) + '%' }"
-                 :class="hudClass(comp().cpu?.level)" />
-          </div>
-          <span class="hud-val">{{ host.metrics.cpu?.usage_percent?.toFixed(1) || 0 }}%</span>
-        </div>
-        <div class="hud-row" v-if="host.metrics.gpu?.length">
-          <span class="hud-label">GPU</span>
-          <div class="hud-bar">
-            <div class="hud-fill gpu" :style="{ width: (host.metrics.gpu[0]?.usage_percent || 0) + '%' }"
-                 :class="hudClass(worstOf((comp().gpu || []).map(g => g.level)))" />
-          </div>
-          <span class="hud-val">{{ host.metrics.gpu[0]?.usage_percent != null ? host.metrics.gpu[0].usage_percent + '%' : 'N/A' }}</span>
-        </div>
-        <div class="hud-row">
-          <span class="hud-label">RAM</span>
-          <div class="hud-bar">
-            <div class="hud-fill ram" :style="{ width: (host.metrics.memory?.percent || 0) + '%' }"
-                 :class="hudClass(comp().mem?.level)" />
-          </div>
-          <span class="hud-val">{{ host.metrics.memory?.used_gb?.toFixed(1) || 0 }}/{{ host.metrics.memory?.total_gb?.toFixed(0) || 0 }}GB</span>
-        </div>
-        <div class="hud-row">
-          <span class="hud-label">NET</span>
-          <span class="hud-net">
-            <span class="net-down">&darr;{{ host.metrics.network?.download_mbps?.toFixed(1) || 0 }}</span>
-            <span class="net-up">&uarr;{{ host.metrics.network?.upload_mbps?.toFixed(1) || 0 }}</span>
-            <span class="net-unit">Mbps</span>
-          </span>
-        </div>
-        <div class="hud-row" v-if="host.metrics.gpu?.[0]?.temperature_c">
-          <span class="hud-label">TEMP</span>
-          <span class="hud-val" :class="hudClass(worstOf((comp().gpu || []).map(g => g.level)))">
-            GPU {{ host.metrics.gpu[0].temperature_c }}&deg;C
-          </span>
-          <span class="hud-val" v-if="host.metrics.cpu?.temperature_c">
-            CPU {{ host.metrics.cpu.temperature_c }}&deg;C
-          </span>
-        </div>
-      </div>
-
-      <!-- Bus legend -->
-      <div class="bus-legend">
-        <span class="bl-item"><i class="bl-dot ddr" />DDR</span>
-        <span class="bl-item"><i class="bl-dot pcie16" />PCIe x16</span>
-        <span class="bl-item"><i class="bl-dot pcie4" />PCIe x4</span>
-        <span class="bl-item"><i class="bl-dot nvlink" />NVLink</span>
-        <span class="bl-item"><i class="bl-dot dmi" />DMI</span>
-      </div>
+      <HudPanel v-if="host" :host="host" :alerts="alerts"
+                @drawer="spec => drawerSpec = spec" />
     </div>
   </div>
 </template>
 
 <style scoped>
+.detail-main { display: flex; width: 100%; height: 100%; min-height: 0; }
+.detail-main .viewport-wrap { flex: 1; width: auto; min-width: 0; }
+.viewport-wrap.offline .viewport { filter: saturate(.15) opacity(.8); }
+
 .back-btn {
   font: inherit; font-size: 12px; cursor: pointer;
   padding: 4px 12px; border-radius: 14px;
@@ -219,6 +226,29 @@ onBeforeUnmount(() => {
   pointer-events: auto;
 }
 .back-btn:hover { border-color: var(--accent); color: var(--accent); }
-.hud-val.crit { color: var(--red); font-weight: 600; }
-.hud-val.warn { color: var(--orange); }
+.tb-right { display: flex; align-items: center; gap: 10px; }
+.tb-role {
+  font-size: 10px; color: var(--text2); border: 1px solid var(--border);
+  border-radius: 8px; padding: 0 6px; background: var(--bg-glass); pointer-events: auto;
+}
+.tb-nodelevel {
+  font-size: 11px; font-weight: 700; padding: 2px 10px; border-radius: 12px;
+  border: 1px solid var(--border); background: var(--bg-glass); pointer-events: auto;
+}
+.tb-nodelevel.ok { color: #1a7f37; border-color: rgba(30,140,50,.4); }
+.tb-nodelevel.warn { color: #9a6700; border-color: rgba(210,153,34,.5); }
+.tb-nodelevel.crit { color: #b62324; border-color: rgba(248,81,73,.5); }
+.tb-nodelevel.offline { color: var(--text3); }
+
+.offline-note {
+  position: absolute; top: 56px; left: 50%; transform: translateX(-50%);
+  font-size: 12px; color: var(--text2); z-index: 11;
+  background: var(--bg-glass); border: 1px solid var(--border);
+  border-radius: 14px; padding: 4px 14px;
+}
+
+@media (max-width: 1100px) {
+  .detail-main { flex-direction: column; }
+  .detail-main :deep(.hud-panel) { width: 100%; border-left: none; border-top: 1px solid var(--border); max-height: 38%; }
+}
 </style>

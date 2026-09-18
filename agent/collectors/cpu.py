@@ -5,9 +5,11 @@ import subprocess
 
 
 def collect():
-    """Collect CPU metrics: usage, cores, frequency, temperature."""
+    """Collect CPU metrics: usage (total + per-core), cores, frequency, temperature."""
+    per_core = psutil.cpu_percent(interval=0.5, percpu=True)
     data = {
-        "usage_percent": psutil.cpu_percent(interval=0.5),
+        "usage_percent": round(sum(per_core) / len(per_core), 1) if per_core else 0.0,
+        "per_core": per_core,
         "cores": psutil.cpu_count(logical=True),
         "cores_physical": psutil.cpu_count(logical=False),
         "freq_mhz": None,

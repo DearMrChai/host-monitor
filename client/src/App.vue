@@ -18,6 +18,7 @@ const SERVER_API = '/api/hosts'
 const hosts = ref([])
 const cluster = ref(null)
 const alerts = ref({ active: [], resolved: [] })
+const thresholds = ref({})
 const connected = ref(false)
 const route = ref({ name: 'overview', hostId: null, from: 'overview' })
 
@@ -70,6 +71,7 @@ function applySnapshot(msg) {
   hosts.value = msg.hosts || []
   cluster.value = msg.cluster || null
   alerts.value = msg.alerts || { active: [], resolved: [] }
+  if (msg.thresholds) thresholds.value = msg.thresholds
   handleSounds(alerts.value.active || [])
 }
 
@@ -140,7 +142,8 @@ onBeforeUnmount(() => {
                   class="app-main" :hosts="hosts"
                   @open="openDetail" />
     <DetailView v-else class="app-main"
-                :host="currentHost" :connected="connected" @back="backFromDetail" />
+                :host="currentHost" :connected="connected"
+                :alerts="alerts" :thresholds="thresholds" @back="backFromDetail" />
   </div>
 </template>
 

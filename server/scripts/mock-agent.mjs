@@ -43,7 +43,8 @@ function frame(hostId, hostname, cpu, mem, gpus, diskParts) {
     hostname,
     platform: 'Mock 1.0',
     timestamp: Date.now(),
-    cpu: { usage_percent: jitter(cpu), cores: 8, cores_physical: 4, freq_mhz: 3200, temperature_c: jitter(55, 8) },
+    cpu: { usage_percent: jitter(cpu), cores: 8, cores_physical: 4, freq_mhz: 3200, temperature_c: jitter(55, 8),
+           per_core: Array.from({ length: 8 }, () => jitter(cpu, 40)) },
     memory: { total_gb: 32, used_gb: Math.round(32 * mem) / 100, percent: mem, available_gb: Math.round(32 * (100 - mem)) / 100, sticks: [] },
     network: { upload_mbps: jitter(20, 10) / 10, download_mbps: jitter(80, 20) / 10, total_sent_gb: 12.3, total_recv_gb: 45.6 },
     gpu: gpus.map((g, i) => ({
@@ -58,6 +59,7 @@ function frame(hostId, hostname, cpu, mem, gpus, diskParts) {
       worst_percent: Math.max(...diskParts.map(p => p.p)),
       total_gb: diskParts.reduce((a, p) => a + p.t, 0),
       used_gb: Math.round(diskParts.reduce((a, p) => a + p.t * p.p, 0) / 100 * 10) / 10,
+      io: { read_mb_s: Math.round(Math.random() * 400) / 10, write_mb_s: Math.round(Math.random() * 250) / 10 },
     },
     system: { uptime_seconds: 345600, load_avg: [1.2, 0.9, 0.8] },
     probes: healthyProbes(),
