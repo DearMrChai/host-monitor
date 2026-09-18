@@ -12,7 +12,9 @@ import { unlock, playWarn, playCrit, setCritLoop } from './lib/sound.js'
    state machine (overview <-> topology <-> detail), the shared top bar /
    alert banner and alert sound dispatch. */
 
-const SERVER_WS = 'ws://localhost:9101'
+/* Server WS lives on the same host as the page, fixed port 9101 (client HTTP+WS
+   server). Derives from location so LAN access (http://<server-ip>:5173) works. */
+const SERVER_WS = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.hostname || 'localhost'}:9101`
 const SERVER_API = '/api/hosts'
 
 const hosts = ref([])

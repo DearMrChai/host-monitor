@@ -1,7 +1,11 @@
 """Memory metric collector - psutil + platform-specific stick info."""
+import json
+
 import psutil
 import platform
 import subprocess
+
+_sticks_cache = None  # DIMM layout is static; probe once per process
 
 
 def collect():
@@ -18,33 +22,36 @@ def collect():
 
 
 def _collect_sticks():
-    """Detect individual memory sticks (DIMM info)."""
+    """Detect individual memory sticks (DIMM info), cached."""
+    global _sticks_cache
+    if _sticks_cache is not None:
+        return _sticks_cache
     system = platform.system()
     sticks = []
 
     if system == "Windows":
+        # wmic is gone on Win11 24H2+ -> CIM via PowerShell, JSON to avoid locale parsing
         try:
             result = subprocess.run(
-                ["wmic", "memorychip", "get",
-                 "BankLabel,Capacity,Speed,Manufacturer,PartNumber"],
-                capture_output=True, text=True, timeout=5,
+                ["powershell", "-NoProfile", "-Command",
+                 "(Get-CimInstance Win32_PhysicalMemory "
+                 "| Select-Object DeviceLocator,Capacity,Speed | ConvertTo-Json -Compress)"],
+                capture_output=True, text=True, timeout=15,
             )
-            lines = [l.strip() for l in result.stdout.strip().split("\n") if l.strip()]
-            if len(lines) > 1:
-                # Parse header
-                headers = [h.strip() for h in lines[0].split()]
-                for line in lines[1:]:
-                    parts = line.split()
-                    if len(parts) >= 3:
-                        try:
-                            stick = {
-                                "slot": parts[0] if parts[0] != "" else f"DIMM_{len(sticks)}",
-                                "size_gb": round(int(parts[1]) / (1024**3), 1) if parts[1].isdigit() else None,
-                                "freq_mhz": int(parts[-1]) if parts[-1].isdigit() else None,
-                            }
-                            sticks.append(stick)
-                        except (ValueError, IndexError):
-                            pass
+            txt = result.stdout.strip()
+            if txt.startswith("[") or txt.startswith("{"):
+                rows = json.loads(txt)
+                if isinstance(rows, dict):
+                    rows = [rows]
+                for r in rows:
+                    cap = r.get("Capacity")
+                    if not cap:
+                        continue
+                    sticks.append({
+                        "slot": r.get("DeviceLocator") or f"DIMM_{len(sticks)}",
+                        "size_gb": round(cap / (1024**3), 1),
+                        "freq_mhz": r.get("Speed") or None,
+                    })
         except Exception:
             pass
 
@@ -83,4 +90,5 @@ def _collect_sticks():
         except Exception:
             pass
 
+    _sticks_cache = sticks
     return sticks

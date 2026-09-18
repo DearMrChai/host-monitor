@@ -1,7 +1,31 @@
 """CPU metric collector - cross-platform via psutil."""
+import time
+
 import psutil
 import platform
 import subprocess
+
+# wmic is removed on Win11 24H2+; thermal zone needs a CIM call which is
+# expensive (powershell spin-up), so refresh at most every 60s and serve the cache.
+_thermal_cache = {"value": None, "ts": 0.0}
+
+
+def _windows_thermal():
+    now = time.time()
+    if now - _thermal_cache["ts"] < 60:
+        return _thermal_cache["value"]
+    _thermal_cache["ts"] = now
+    try:
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "(Get-CimInstance -Namespace root/wmi -ClassName MSAcpi_ThermalZoneTemperature "
+             "| Select-Object -First 1 -ExpandProperty CurrentTemperature)"],
+            capture_output=True, text=True, timeout=10,
+        )
+        _thermal_cache["value"] = round(float(out.stdout.strip()) / 10.0 - 273.15, 1)
+    except Exception:
+        _thermal_cache["value"] = None
+    return _thermal_cache["value"]
 
 
 def collect():
@@ -35,19 +59,8 @@ def collect():
     except (AttributeError, Exception):
         pass
 
-    # Windows fallback: WMI thermal zone
+    # Windows fallback: WMI thermal zone (CIM; often needs admin -> stays None)
     if data["temperature_c"] is None and platform.system() == "Windows":
-        try:
-            result = subprocess.run(
-                ["wmic", "/namespace:\\\\root\\\\wmi", "PATH",
-                 "MSAcpi_ThermalZoneTemperature", "get", "CurrentTemperature"],
-                capture_output=True, text=True, timeout=5,
-            )
-            lines = [l.strip() for l in result.stdout.strip().split("\n") if l.strip()]
-            if len(lines) > 1:
-                kelvin_tenths = int(lines[1])
-                data["temperature_c"] = round(kelvin_tenths / 10.0 - 273.15, 1)
-        except Exception:
-            pass
+        data["temperature_c"] = _windows_thermal()
 
     return data

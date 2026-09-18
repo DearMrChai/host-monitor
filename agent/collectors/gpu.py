@@ -1,4 +1,5 @@
 """GPU metric collector - NVIDIA via nvidia-ml-py, graceful fallback if unavailable."""
+import json
 import warnings
 import platform
 
@@ -72,8 +73,19 @@ def collect():
     return gpus
 
 
+_fallback_cache = None
+
+
 def _collect_fallback():
-    """Fallback: try to detect GPUs via system commands (basic info only)."""
+    """Fallback: enumerate GPUs via CIM (basic info only, no utilization).
+
+    Static hardware info -> probe once and cache. wmic is removed on
+    Windows 11 24H2+, so we use PowerShell Get-CimInstance with JSON output.
+    """
+    global _fallback_cache
+    if _fallback_cache is not None:
+        return _fallback_cache
+
     gpus = []
     system = platform.system()
 
@@ -81,25 +93,32 @@ def _collect_fallback():
         try:
             import subprocess
             result = subprocess.run(
-                ["wmic", "path", "win32_VideoController", "get", "name,AdapterRAM"],
-                capture_output=True, text=True, timeout=5,
+                ["powershell", "-NoProfile", "-Command",
+                 "(Get-CimInstance Win32_VideoController | "
+                 "Select-Object Name,AdapterRAM | ConvertTo-Json -Compress)"],
+                capture_output=True, text=True, timeout=15,
             )
-            lines = [l.strip() for l in result.stdout.strip().split("\n") if l.strip()]
-            for idx, line in enumerate(lines[1:]):  # skip header
-                parts = line.rsplit(None, 1)
-                if len(parts) >= 1:
-                    name = parts[0] if len(parts) == 2 else line
+            out = result.stdout.strip()
+            if out:
+                entries = json.loads(out)
+                if isinstance(entries, dict):
+                    entries = [entries]
+                for idx, e in enumerate(entries):
+                    adapter_ram = e.get("AdapterRAM")
                     gpus.append({
                         "index": idx,
-                        "name": name.strip(),
+                        "name": (e.get("Name") or "Unknown GPU").strip(),
                         "usage_percent": None,
+                        "mem_percent": None,
                         "vram_used_mb": None,
-                        "vram_total_mb": None,
+                        # AdapterRAM caps at 4GB on some drivers; best-effort.
+                        "vram_total_mb": round(adapter_ram / (1024 * 1024)) if adapter_ram else None,
                         "temperature_c": None,
                     })
         except Exception:
             pass
 
+    _fallback_cache = gpus
     return gpus
 
 
