@@ -38,6 +38,7 @@ const events = await import('../src/events.js')
 const { oncePerEpisode } = events
 const { ingest, REASON_TEXT } = await import('../src/ingest.js')
 const { store } = await import('../src/store.js')
+const { alertEngine } = await import('../src/alerts.js')
 const { evaluateCluster, thresholds } = await import('../src/status.js')
 
 let pass = 0
@@ -143,6 +144,38 @@ ok('B5 多轮扫描只留一条缺席事件（噪声纪律）',
 ok('B6 缺席事件带"多久没上报"的事实，文案由它算出',
   /10 分钟/.test(find(readAll(), 'absent', 'ghost-box')[0]?.text || ''),
   find(readAll(), 'absent', 'ghost-box')[0]?.text)
+
+/* B6b-B6e (S3b): the alert side of the same moment. A persistent node that turns
+   into an absence stops yielding reasons, and the pre-S3 engine read that as a
+   recovery — printing "在线状态 回到阈值内（204）" for a node 204 seconds stale,
+   which is the exact opposite sentence. 失联 closing as 改判缺席 is a fourth
+   closure kind (S3 §2: 恢复了 / 退役了 / 改判缺席 / 再无数据 are four facts). */
+const E = alertEngine.constructor
+const eClose = new E()
+const tClose = Date.now()
+eClose.advance([{
+  host_id: 'ghost-box', hostname: 'ghost-box', online: false,
+  status: { level: 'OFFLINE', reasons: [
+    { metric: 'offline', source: 'heartbeat', value: 3, threshold: 15, level: 'OFFLINE' }] },
+}], tClose)
+ok('B6b 失联告警在活动中（改判的前提是它真的响过）',
+  eClose.getLists().active.some((a) => a.host_id === 'ghost-box' && a.metric === 'offline'))
+eClose.advance([{
+  host_id: 'ghost-box', hostname: 'ghost-box', online: false, absent_record: true,
+  status: { level: 'OFFLINE', absent: true, absent_record: true, reasons: [] },
+}], tClose + 2_000)
+const closed = eClose.entries.get('ghost-box|offline|heartbeat')
+ok('B6c 缺席不是恢复：告警以 cancelled=absent 关闭',
+  closed?.state === 'resolved' && closed?.cancelled === 'absent',
+  JSON.stringify(closed && { st: closed.state, by: closed.cancelled }))
+const closeLines = readAll().filter((e) => e.host_id === 'ghost-box'
+  && /失联|回到阈值/.test(e.text)).map((e) => e.text)
+ok('B6d 事件流里读得到"改判缺席"，读不到"回到阈值内"',
+  closeLines.some((t2) => /告警终止：改判缺席/.test(t2))
+  && !closeLines.some((t2) => /回到阈值内/.test(t2)), JSON.stringify(closeLines))
+ok('B6e 失联的触发行不再自相矛盾（值 3 < 阈值 15 的那句）',
+  closeLines.some((t2) => t2 === '节点失联（超过 15s 无上报）'),
+  JSON.stringify(closeLines))
 
 store.register('ghost-box', { hostname: 'ghost-box' })
 store.updateMetrics('ghost-box', { hostname: 'ghost-box', cpu: { usage_percent: 5 } })

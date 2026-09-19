@@ -4,7 +4,7 @@ import { TopologyRenderer } from '../three/TopologyRenderer.js'
 import HudPanel from '../components/HudPanel.vue'
 import DrawerV3 from '../components/DrawerV3.vue'
 import defaultTopology from '../config/sample-topology.json'
-import { STATUS_TEXT, ROLE_LABELS, displayName, isAbsent, formatSeenLast, CLASS_LABELS } from '../lib/status.js'
+import { STATUS_TEXT, ROLE_LABELS, displayName, isAbsent, formatSeenLast, formatAgo, CLASS_LABELS } from '../lib/status.js'
 
 /* V2 node detail, two-layer (P4):
    left = 3D shell (colors/blinks locate the alarm source, click -> V3 drawer)
@@ -119,9 +119,13 @@ const alarmMap = computed(() => {
 const nodeLevel = computed(() => props.host?.status?.level ||
   (props.host?.online ? 'OK' : 'OFFLINE'))
 
-/* S1b: same grey, right word — a temporary node that left is 离场, not 失联. */
+/* S1b: same grey, right word — a temporary node that left is 离场, not 失联.
+   S3b adds the third case: a persistent node the Server has not heard from since
+   a restart is 缺席, which is neither of those and must not borrow their words. */
 const absent = computed(() => isAbsent(props.host || {}))
-const levelText = computed(() => (absent.value ? '离场' : STATUS_TEXT[nodeLevel.value]))
+const levelText = computed(() => (absent.value
+  ? (props.host?.absent_record ? '缺席' : '离场')
+  : STATUS_TEXT[nodeLevel.value]))
 
 function sync3D(host) {
   if (!renderer || !host?.metrics || !host.online) return
@@ -188,7 +192,9 @@ onBeforeUnmount(() => {
             告警按最后已知状态保留，不会因此被判成"已恢复"</p>
         </div>
         <div v-else-if="absent" class="offline-note">
-          临时节点已离场 · 上次在场 {{ formatSeenLast(host.last_seen) }}（不报警、不计入在线率）
+          {{ host.absent_record
+            ? `常驻节点已缺席 · 上次在场 ${formatAgo(host.last_seen)}（计入在线率，不计入健康度）`
+            : `临时节点已离场 · 上次在场 ${formatSeenLast(host.last_seen)}（不报警、不计入在线率）` }}
         </div>
         <div v-else-if="!host.online" class="offline-note">
           节点失联{{ host.lastSeen ? ' · 最后上报 ' + new Date(host.lastSeen).toLocaleTimeString() : '' }}

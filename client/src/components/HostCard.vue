@@ -1,13 +1,20 @@
 <script setup>
 import { computed, ref } from 'vue'
+import Sparkline from './Sparkline.vue'
 import {
   hostLevel, LEVEL_RANK, ROLE_LABELS, STATUS_TEXT, formatUptime, formatReason,
-  displayName, isAbsent, formatSeenLast, CLASS_LABELS, CLASS_HINT,
+  displayName, isAbsent, formatSeenLast, formatAgo, CLASS_LABELS, CLASS_HINT,
 } from '../lib/status.js'
 import { admin, canWrite, openDialog, rosterPost, flash } from '../lib/admin.js'
+import { sparkOf } from '../lib/series.js'
 
 const props = defineProps({ host: { type: Object, required: true } })
 const emit = defineEmits(['open'])
+
+/* No series fetching here on purpose: the overview owns the visible list and
+   publishes it to lib/series.js (one poller, one request per host per 30s).
+   A card that fetched for itself would multiply by however many cards fit. */
+const spark = computed(() => sparkOf(props.host))
 
 const level = computed(() => hostLevel(props.host))
 const m = computed(() => props.host.metrics)
@@ -65,6 +72,23 @@ const pending = computed(() => props.host.status?.pending || [])
 const name = computed(() => displayName(props.host))
 const absent = computed(() => isAbsent(props.host))
 const cls = computed(() => props.host.presence_class || 'persistent')
+/* Two different absences, because they are two different claims (S3 §4.2/§4.3):
+   离场 = a temporary node that left, expected; 缺席 = a node the roster trusts to
+   be here has not been heard from since a Server restart. The second one is the
+   H12 case, so it says how long and what it does and does not affect. */
+const absentLine = computed(() => {
+  if (!absent.value) return null
+  if (props.host.absent_record) {
+    return {
+      head: `缺席 · 上次在场 ${formatAgo(props.host.last_seen)}`,
+      note: '计入在线率，不计入集群健康度',
+    }
+  }
+  return {
+    head: `离场 · 上次在场 ${formatSeenLast(props.host.last_seen)}`,
+    note: '临时节点失联不报警',
+  }
+})
 const mutedUntil = computed(() => (Number(props.host.muted_until) || null))
 const mutedText = computed(() =>
   mutedUntil.value ? `🔕 静默至 ${formatSeenLast(mutedUntil.value)}` : '')
@@ -182,9 +206,9 @@ function pick(item) {
               @click.stop="toggleMenu">⋯</button>
     </div>
 
-    <div class="hc-absent" v-if="absent">
-      离场 · 上次在场 {{ formatSeenLast(host.last_seen) }}
-      <em>临时节点失联不报警</em>
+    <div class="hc-absent" v-if="absentLine">
+      {{ absentLine.head }}
+      <em>{{ absentLine.note }}</em>
     </div>
     <div class="hc-muted" v-else-if="mutedText">{{ mutedText }}</div>
 
@@ -206,6 +230,17 @@ function pick(item) {
       </div>
     </div>
     <div class="hc-nodata" v-else-if="!absent">等待首帧数据…</div>
+
+    <!-- S3b §6.2: the bars say now, this says how it got there. Hidden on absent
+         cards, whose last two hours are mostly a flat line at nothing. -->
+    <div class="hc-spark" v-if="spark && !absent">
+      <Sparkline v-if="spark.drawn >= 2"
+                 :points="spark.points" :label="spark.label" :delta="spark.delta" />
+      <!-- One empty state, not two: Sparkline's own "—" is a defence, and the
+           card is where the reason belongs. -->
+      <span class="hcs-hint" v-else-if="spark.failed">历史读取失败</span>
+      <span class="hcs-hint" v-else>2h 历史不足</span>
+    </div>
 
     <div class="hc-reasons" v-if="reasons.length">
       <div class="hcr" v-for="(r, i) in reasons" :key="i" :class="r.level.toLowerCase()">
@@ -308,6 +343,11 @@ function pick(item) {
 .hcb-val.na { color: var(--text3); }
 
 .hc-nodata { font-size: 12px; color: var(--text3); padding: 8px 0; }
+.hc-spark {
+  display: flex; align-items: center; gap: 8px;
+  border-top: 1px dashed var(--border); padding-top: 5px; margin-top: -2px;
+}
+.hcs-hint { font-size: 10px; color: var(--text3); }
 .hc-reasons { border-top: 1px dashed var(--border); padding-top: 6px; display: flex; flex-direction: column; gap: 2px; }
 .hcr { font-size: 10px; color: var(--text2); }
 .hcr.warn { color: #9a6700; }

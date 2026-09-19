@@ -1,5 +1,6 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import EventStream from '../components/EventStream.vue'
 import { displayName } from '../lib/status.js'
 import { admin, canWrite, openDialog, rosterPost, flash } from '../lib/admin.js'
 
@@ -23,7 +24,6 @@ defineEmits(['open'])
 const now = ref(Date.now())
 const codes = ref([])
 const rosterNodes = ref([])   // name source for nodes the live host table lacks
-const events = ref([])
 const counts = ref({})
 const loading = ref(false)
 const minted = ref(null)        // { code, code_tail, expires_at, max_uses, host, agent_port }
@@ -49,7 +49,6 @@ async function load() {
     if (res.ok) {
       const data = await res.json()
       codes.value = data.codes || []
-      events.value = data.ingest?.events || []
       counts.value = data.ingest?.counts || {}
       // A code whose paired_ids grew is the "it arrived" moment the page exists
       // for. Seeding on the first pass keeps a reload from celebrating old joins.
@@ -172,12 +171,6 @@ function nodeText(id) {
   const h = byId.value.get(id) || byRosterId.value.get(id)
   return h ? displayName(h) : id
 }
-function ago(ts) {
-  const mins = Math.max(0, Math.round((now.value - ts) / 60000))
-  if (mins < 1) return '刚刚'
-  if (mins < 60) return `${mins} 分钟前`
-  return `${Math.round(mins / 60)} 小时前`
-}
 
 /* ---------- demo fleet ---------- */
 
@@ -286,21 +279,16 @@ const keyless = computed(() => admin.keylessAgents || [])
       </main>
 
       <aside class="en-col">
-        <!-- 4. who got turned away. The ledger is an in-memory ring (H15): after a
-             Server restart the list is legitimately empty, so the card names its own
-             window - "暂无记录" would read as "nobody ever tried", which is the
-             opposite of what happened before the restart. -->
+        <!-- 4. who got turned away. S3b moved this off the in-memory ring (H15):
+             the ledger is the durable stream, so a Server restart no longer erases
+             the evidence that someone was knocking. The ring's counters stay, but
+             labelled as per-boot, because that is all they ever were. -->
         <section class="en-card">
-          <h3>最近异常接入 <em>只到 Server 本次启动 · 地址只到网段</em></h3>
-          <div v-if="!events.length" class="en-empty">本次启动以来没有拒绝记录</div>
-          <ul v-else class="en-ev">
-            <li v-for="(e, i) in events" :key="i" :class="{ accepted: e.accepted }">
-              <b>{{ e.text || e.reason }}</b>
-              <span>{{ e.host_id || '—' }} · {{ e.addr || '未知地址' }} · {{ ago(e.ts) }}</span>
-            </li>
-          </ul>
-          <div class="ev-counts" v-if="counts.denied">
-            累计拒绝 {{ counts.denied }} 次 · 配对成功 {{ counts.paired || 0 }} 次
+          <EventStream lock-kind="ingest" :max-rows="16" compact
+                       title="异常接入与配对（近 24 小时）" />
+          <div class="ev-counts" v-if="counts.denied || counts.paired">
+            本次启动累计：拒绝 {{ counts.denied || 0 }} 次 · 配对 {{ counts.paired || 0 }} 次
+            · 宽限放行 {{ counts.accepted_legacy || 0 }} 次
           </div>
         </section>
 
@@ -345,6 +333,9 @@ const keyless = computed(() => admin.keylessAgents || [])
 }
 .en-card h3 { margin: 0 0 10px; font-size: 13px; font-weight: 600; }
 .en-card h3 em { font-style: normal; font-weight: 400; font-size: 11px; color: var(--text3); margin-left: 6px; }
+/* The durable ledger is the card's only content, so it drops its own frame here
+   (same reason as the HUD variant): a box inside a box reads as two features. */
+.en-card .event-stream { border: none; background: none; padding: 0; }
 .en-mint { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--text2); }
 .en-mint select {
   font: inherit; font-size: 12px; margin-left: 4px; padding: 3px 6px;
@@ -412,11 +403,6 @@ button { font: inherit; }
 }
 .ej i { font-style: normal; font-size: 10px; color: var(--text3); }
 .en-empty { font-size: 12px; color: var(--text3); }
-.en-ev { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-.en-ev li { font-size: 11px; display: flex; flex-direction: column; gap: 1px; }
-.en-ev li b { font-weight: 600; color: #9a6700; }
-.en-ev li span { color: var(--text3); }
-.en-ev li.accepted b { color: var(--text2); }
 .ev-counts { margin-top: 8px; font-size: 11px; color: var(--text3); }
 .kl-row { display: flex; flex-wrap: wrap; gap: 6px; }
 .kl {

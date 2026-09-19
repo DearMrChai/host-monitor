@@ -499,8 +499,10 @@ class Roster {
     this.#metaSet('admin_pass', `scrypt$${salt}$${hash}`)
     // The fact "the admin passphrase changed" belongs in the audit stream; the
     // passphrase itself never goes anywhere near it (S3 §5, H11's transition rule).
+    // Setting one for the first time is installation noise; replacing a live one is
+    // the case somebody should look at, so only that one is amber.
     recordEvent({ kind: 'roster', code: 'passphrase_changed', hostId: null,
-      level: 'warn', detail: { was_set: wasSet } })
+      level: wasSet ? 'warn' : 'info', detail: { was_set: wasSet } })
     return { ok: true }
   }
 

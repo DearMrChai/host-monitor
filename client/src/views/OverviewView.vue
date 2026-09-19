@@ -1,9 +1,11 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import HostCard from '../components/HostCard.vue'
 import AlertPanel from '../components/AlertPanel.vue'
+import EventStream from '../components/EventStream.vue'
 import { sortHostsForOverview, displayName, CLASS_LABELS } from '../lib/status.js'
 import { admin, canWrite, openDialog, rosterPost, flash } from '../lib/admin.js'
+import { setInterest, start as startSeries, stop as stopSeries } from '../lib/series.js'
 
 /* V1 overview body. Cluster bar + alert banner live in the App shell
    since P3 (shared with the V1.5 topology view). */
@@ -17,6 +19,12 @@ const props = defineProps({
 defineEmits(['open'])
 
 const sorted = computed(() => sortHostsForOverview(props.hosts))
+
+/* Card order is the interest order: lib/series.js caps how many hosts it polls,
+   so the sparkline of the machine at the top-left is the one that survives. */
+watch(sorted, (list) => setInterest(list.map(h => h.host_id)), { immediate: true })
+onMounted(startSeries)
+onBeforeUnmount(stopSeries)
 
 /* The guidance bar is the only place a first-seen node gets its class. It stays
    a single inline row per node — a modal for "is this yours forever?" is the
@@ -57,7 +65,13 @@ async function classify(node, cls) {
         <HostCard v-for="h in sorted" :key="h.host_id" :host="h"
                   @open="id => $emit('open', id)" />
       </main>
-      <AlertPanel class="ov-alerts" :alerts="alerts" @open="id => $emit('open', id)" />
+      <div class="ov-rail">
+        <AlertPanel :alerts="alerts" @open="id => $emit('open', id)" />
+        <!-- S3b: the rail's second panel answers the question the grid cannot -
+             not "what is true now" but "what changed today". Clicking a row
+             opens that node, which is also how you get from "掉过线" to why. -->
+        <EventStream class="ov-events" compact :max-rows="24" @open="id => $emit('open', id)" />
+      </div>
     </div>
   </div>
 </template>
@@ -96,8 +110,16 @@ async function classify(node, cls) {
   grid-column: 1 / -1; text-align: center; padding: 60px 20px;
   color: var(--text3); font-size: 13px;
 }
-.ov-alerts { position: sticky; top: 0; align-self: start; max-height: calc(100vh - 100px); overflow: auto; }
+/* The rail scrolls as a unit, but its two panels are sticky separately: alerts
+   must stay reachable when the day has been busy enough to fill the stream. */
+.ov-rail {
+  position: sticky; top: 0; align-self: start;
+  display: flex; flex-direction: column; gap: 12px;
+  max-height: calc(100vh - 100px); overflow: auto;
+}
+.ov-events { flex-shrink: 0; }
 @media (max-width: 900px) {
   .ov-body { grid-template-columns: 1fr; }
+  .ov-rail { position: static; max-height: none; }
 }
 </style>

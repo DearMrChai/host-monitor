@@ -74,11 +74,12 @@ const METRIC_TEXT = {
   packet_loss: '丢包率',
   offline: '在线状态',
 }
-/** Why an alert was cancelled (S1b taxonomy) -> honest wording. */
+/** Why an alert was cancelled (S1b taxonomy + S3's 缺席) -> honest wording. */
 const CANCELLED_TEXT = {
   reclassified: '节点改了归属',
   retired: '节点已退役',
-  stale: '节点失联（Server 无数据）',
+  stale: 'Server 重启后再无数据',
+  absent: '改判缺席',
 }
 
 export function attach(history, bind = {}) {
@@ -147,7 +148,8 @@ export const oncePerEpisode = { onceMs: ABSENT_ONCE_MS, mergeMs: null }
 /**
  * Threshold crossings, read straight from the alert lifecycle table (S3 §2).
  * An open alert yields its trigger line; a closed one yields the trigger plus
- * how it ended, so "恢复了 / 被你退役了 / 失联了" stay three different sentences.
+ * how it ended, so "恢复了 / 被你退役了 / 改判缺席了 / Server 重启后失联" stay four
+ * different sentences (S3 §2: the closure kind is the fact, not the timestamp).
  */
 function alertRows(db, from, hostId) {
   const out = []
@@ -161,28 +163,39 @@ function alertRows(db, from, hostId) {
   for (const a of rows) {
     const metric = METRIC_TEXT[a.metric] || a.metric
     const where = a.source && a.source !== a.metric ? `（${a.source}）` : ''
-    const unit = /temp|gpu_temp/.test(a.metric) ? '℃' : a.metric === 'rtt_ms' ? 'ms' : ''
+    const unit = /temp/.test(a.metric) ? '℃' : a.metric === 'rtt_ms' ? 'ms' : ''
     const value = a.value_at_trigger == null ? '' : ` 触发值 ${a.value_at_trigger}${unit}`
     const th = a.threshold == null ? '' : ` 阈值 ${a.threshold}${unit}`
-    const level = a.level === 'CRIT' ? 'crit' : a.level === 'WARN' ? 'warn' : 'info'
+    /* OFFLINE is a CRIT-grade fact everywhere else (the banner counts it, the
+       card reds it); reading it as an grey info line was a second-class
+       rendering of a first-class failure. */
+    const level = (a.level === 'CRIT' || a.level === 'OFFLINE') ? 'crit'
+      : a.level === 'WARN' ? 'warn' : 'info'
+    /* 失联 is not a threshold crossing in any meaningful sense: the stored value
+       is the staleness at the instant the rule fired (often 3s, because OFFLINE
+       skips the debounce), so "越过阈值 阈值 15 触发值 3" was an arithmetic
+       contradiction on a Chinese line. It gets its own three sentences. */
+    const gone = a.metric === 'offline'
     out.push({
       ts: a.started_at, kind: 'alert', host_id: a.host_id, level,
       code: 'alert_active', count: 1,
-      text: `${metric}${where}越过阈值${th}${value}`,
+      text: gone ? `节点失联（超过 ${a.threshold ?? '—'}s 无上报）`
+        : `${metric}${where}越过阈值${th}${value}`,
       detail: { metric: a.metric, source: a.source, state: a.state, alert_level: a.level },
     })
     if (a.cancelled) {
       out.push({
         ts: a.resolved_at || a.started_at, kind: 'alert', host_id: a.host_id, level: 'info',
         code: 'alert_cancelled', count: 1,
-        text: `${metric}${where}告警终止：${CANCELLED_TEXT[a.cancelled] || a.cancelled}`,
+        text: `${gone ? '失联' : `${metric}${where}`}告警终止：${CANCELLED_TEXT[a.cancelled] || a.cancelled}`,
         detail: { metric: a.metric, cancelled: a.cancelled },
       })
     } else if (a.state === 'resolved' && a.resolved_at) {
       out.push({
         ts: a.resolved_at, kind: 'alert', host_id: a.host_id, level: 'info',
         code: 'alert_resolved', count: 1,
-        text: `${metric}${where}回到阈值内${a.latest_value == null ? '' : `（${a.latest_value}${unit}）`}`,
+        text: gone ? '节点恢复上报，失联告警结束'
+          : `${metric}${where}回到阈值内${a.latest_value == null ? '' : `（${a.latest_value}${unit}）`}`,
         detail: { metric: a.metric, latest_value: a.latest_value },
       })
     }

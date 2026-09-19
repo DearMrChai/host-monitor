@@ -50,6 +50,7 @@ export function isAbsent(host) {
 export function resolvedText(a) {
   const by = a?.cancelled || (a?.state === 'cancelled' ? 'reclassified' : null)
   if (by === 'retired') return '已退役·告警关闭'
+  if (by === 'absent') return '已改判缺席·不再报警'
   if (by === 'reclassified') return '已改判临时·不再报警'
   if (by === 'stale') return '已失效·节点长期未上报'
   return '已恢复'
@@ -64,15 +65,63 @@ export function formatSeenLast(ts) {
   return today ? hm : `${d.getMonth() + 1}-${d.getDate()} ${hm}`
 }
 
+/* "3 小时前" is the question an absence card actually asks; a clock time makes
+   the viewer subtract against their own watch. Coarse on purpose - the value it
+   is reading (roster.last_seen) is itself only persisted every 30s. */
+export function formatAgo(ts, now = Date.now()) {
+  if (!ts) return '时间未知'
+  const m = Math.floor(Math.max(0, now - ts) / 60_000)
+  if (m < 1) return '刚刚'
+  if (m < 60) return `${m} 分钟前`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h} 小时${m % 60 ? ` ${m % 60} 分` : ''}前`
+  return `${Math.floor(h / 24)} 天前`
+}
+
+/* ---------- S3b: what deserves the top-left of the grid ----------
+   LEVEL_RANK stays what it always was (severity of *this node*), and is
+   deliberately NOT the card order. Ordering by it put a machine that is simply
+   switched off (OFFLINE=3) above one that is overheating (CRIT=2), which is the
+   H1 mistake in a milder form: the loudest thing on screen was "it isn't here",
+   not "it is in trouble". So the grid sorts by attention, a separate scale:
+   trouble first, absence after health, 离场 last of all. */
+
+export const ATTENTION_TEXT = {
+  crit: '严重', warn: '警告', offline: '失联', absent: '缺席', ok: '正常', away: '离场',
+}
+
+/** 0 = top-left. Lower is more urgent; never derived from LEVEL_RANK alone. */
+export function attentionRank(host) {
+  // Absence is the only thing that gets demoted - a node that is here and in
+  // trouble keeps its band whatever its class is, or a borrowed laptop on fire
+  // would sort below an idle server.
+  if (isAbsent(host)) return host.presence_class === 'ephemeral' ? 6 : 3
+  const level = hostLevel(host)
+  if (level === 'CRIT') return 0
+  if (level === 'WARN') return 1
+  if (level === 'OFFLINE') return 2 // was here, now gone: a real loss
+  return host.presence_class === 'ephemeral' ? 5 : 4
+}
+
+/** The load that breaks a tie inside one attention band. */
+function loadOf(host) {
+  const m = host.metrics
+  if (!m) return -1
+  const gpus = (m.gpu || []).map((g) => g.usage_percent ?? 0)
+  return Math.max(
+    m.cpu?.usage_percent ?? -1,
+    m.memory?.percent ?? -1,
+    ...(gpus.length ? gpus : [-1]),
+  )
+}
+
 export function sortHostsForOverview(hosts) {
   return [...hosts].sort((a, b) => {
-    // Absent-first-out: a node that merely left is not an incident, so it must
-    // not sit at the top of the grid on the strength of its grey OFFLINE rank.
-    const aa = isAbsent(a), ab = isAbsent(b)
-    if (aa !== ab) return aa ? 1 : -1
-    const la = hostLevel(a)
-    const lb = hostLevel(b)
-    if (LEVEL_RANK[lb] !== LEVEL_RANK[la]) return LEVEL_RANK[lb] - LEVEL_RANK[la]
+    const aa = attentionRank(a), ab = attentionRank(b)
+    if (aa !== ab) return aa - ab
+    // Same band: the busier machine first - that is the one the viewer asks about.
+    const la = loadOf(a), lb = loadOf(b)
+    if (la !== lb) return lb - la
     const wa = ROLE_WEIGHTS[a.role] ?? ROLE_WEIGHTS.other
     const wb = ROLE_WEIGHTS[b.role] ?? ROLE_WEIGHTS.other
     if (wa !== wb) return wa - wb
@@ -95,14 +144,26 @@ export const METRIC_LABELS = {
   rtt_ms: '链路延迟', packet_loss: '丢包率',
 }
 
+/**
+ * The unit a metric's number carries. One function because the banner used to
+ * hardcode "%" for everything but 失联, which printed "CPU温度 97%" — a wrong
+ * fact on the loudest line in the UI. Anything new must land here, not at a
+ * call site.
+ */
+export function unitFor(metric) {
+  if (metric === 'rtt_ms') return 'ms'
+  if (metric === 'offline') return 's'
+  if (metric?.endsWith('temp')) return '°C'
+  return '%'
+}
+
 export function formatReason(r) {
   const label = METRIC_LABELS[r.metric] || r.metric
   const isLink = r.metric === 'rtt_ms' || r.metric === 'packet_loss'
   const source = isLink ? ` ↔${r.source}`
     : (r.source && !['cpu', 'mem', 'heartbeat'].includes(r.source) && r.source !== r.metric
       ? ` ${r.source}` : '')
-  const unit = isLink ? (r.metric === 'rtt_ms' ? 'ms' : '%')
-    : r.metric.endsWith('temp') ? '°C' : r.metric === 'offline' ? 's' : '%'
+  const unit = unitFor(r.metric)
   return `${label}${source} ${r.value}${unit}（阈值 ${r.threshold}）`
 }
 

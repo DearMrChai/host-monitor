@@ -1,9 +1,11 @@
 <script setup>
 import { computed } from 'vue'
+import EventStream from './EventStream.vue'
 import {
   ROLE_LABELS, formatUptime, formatReason, resolvedText,
-  displayName, isAbsent, formatSeenLast, CLASS_LABELS, CLASS_HINT,
+  displayName, isAbsent, formatSeenLast, formatAgo, CLASS_LABELS, CLASS_HINT,
 } from '../lib/status.js'
+import { stream } from '../lib/events.js'
 
 /* V2 right column: 2D numeric HUD panel (P4 two-layer rework).
    Rows are clickable -> parent opens the matching V3 drawer.
@@ -14,6 +16,9 @@ const props = defineProps({
   alerts: { type: Object, default: () => ({ active: [], resolved: [] }) },
 })
 const emit = defineEmits(['drawer'])
+
+/* Shared with the overview rail (lib/events.js), so no second poller starts here. */
+const myEvents = computed(() => stream.events.filter((e) => e.host_id === props.host.host_id))
 
 const m = computed(() => props.host.metrics || {})
 const comp = computed(() => props.host.status?.components || {})
@@ -139,7 +144,11 @@ const uptimeText = computed(() => {
         </div>
       </template>
 
-      <template v-if="myAlerts.active.length || myAlerts.resolved.length">
+      <template v-if="(myAlerts.active.length || myAlerts.resolved.length) && !myEvents.length">
+        <!-- The stream already carries this machine's crossings (they come from
+             the same alert_events rows, S3 §2), so showing both would print the
+             same fact twice in two different fonts. This block is the fallback
+             for a history-disabled Server, where the stream is empty by design. -->
         <div class="hud-sec-title">本机告警</div>
         <div class="hud-alert" v-for="a in myAlerts.active" :key="a.id" :class="cls(a.level)">
           <i class="dot" :class="cls(a.level)" />
@@ -152,12 +161,20 @@ const uptimeText = computed(() => {
     </template>
 
     <div v-else-if="absent" class="hud-absent">
-      该临时节点已离场 · 上次在场 {{ formatSeenLast(host.last_seen) }}
-      <em>不报警、不计入在线率</em>
+      {{ host.absent_record ? '该常驻节点自 Server 重启后未再上报' : '该临时节点已离场' }}
+      · 上次在场 {{ formatSeenLast(host.last_seen) }}（{{ formatAgo(host.last_seen) }}）
+      <em>{{ host.absent_record
+        ? '计入在线率与事件流，不计入集群健康度'
+        : '不报警、不计入在线率' }}</em>
     </div>
     <div v-else class="hud-offline">
       节点失联{{ host.lastSeen ? ' · 最后上报 ' + new Date(host.lastSeen).toLocaleTimeString() : '' }}
     </div>
+
+    <!-- S3b §6.1: "what happened to this machine today", in the one place a
+         person looks when a card has caught their eye. -->
+    <EventStream class="hud-events" :host-id="host.host_id" compact :max-rows="12"
+                 title="本机事件" />
   </aside>
 </template>
 
@@ -197,4 +214,11 @@ const uptimeText = computed(() => {
 }
 .hud-class.ephemeral { color: var(--text2); background: rgba(0,0,0,.05); border: 1px dashed var(--border); }
 .hud-muted { font-style: normal; font-size: 11px; }
+/* Flat inside the HUD: it is already one glass panel, and a second frame inside
+   it reads as a widget that does not belong to this machine. Two classes for
+   specificity - a single one can lose to the child's own .event-stream rule. */
+.hud-panel .hud-events {
+  border: none; border-top: 1px dashed var(--border);
+  border-radius: 0; background: none; padding: 8px 0 2px;
+}
 </style>

@@ -71,6 +71,10 @@ class AlertEngine {
     // Hosts the Server has *any* record of in this process. Absent from this
     // set means "we know nothing", not "it got healthy" - see the freeze below.
     const known = new Set(hosts.map((h) => h.host_id))
+    // S3b: the subset of those records that are synthesised absences. They are
+    // `known` (so they do not age out as stale) but they yield no reasons (so
+    // they must not read as a recovery either) - they get their own closure.
+    const absent = new Set(hosts.filter((h) => h.absent_record).map((h) => h.host_id))
 
     for (const host of hosts) {
       for (const r of host.status?.reasons || []) {
@@ -116,9 +120,14 @@ class AlertEngine {
         /* S1b: leaving the alarming population is not a recovery. When a node
            is reclassified (临时) or retired while its alert is open, close it
            as cancelled - ageing it into "已恢复" would tell the user the
-           machine came back, which is the opposite of what happened. */
+           machine came back, which is the opposite of what happened.
+           S3b adds one more way out: a persistent node that turns into an
+           absent_record stops yielding reasons, and the OLD path resolved its
+           失联 alert as "回到阈值内（204）" — with the node 204 seconds stale, that
+           is the same lie in a new costume. It closes as 改判缺席 instead. */
         const cls = roster.classOf(e.host_id)
         const cancelledBy = cls === 'retired' ? 'retired'
+          : absent.has(e.host_id) ? 'absent'
           : (cls === 'ephemeral' && e.metric === 'offline') ? 'reclassified' : null
         if (cancelledBy) {
           e.state = 'resolved'
