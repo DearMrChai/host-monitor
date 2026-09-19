@@ -29,8 +29,8 @@ IS_WINDOWS = platform.system() == "Windows"
 
 # "time=1ms" / "time<1ms" / "时间=1ms" / "时间<1ms"
 _RTT_RE = re.compile(r"(?:time|时间)\s*[=<]\s*([\d.]+)\s*ms", re.IGNORECASE)
-# "Reply from ..." / "来自 ... 的回复"
-_REPLY_RE = re.compile(r"(?:reply from|来自)", re.IGNORECASE)
+# "Reply from ..." / "来自 ... 的回复" / Linux+macOS "64 bytes from ..."
+_REPLY_RE = re.compile(r"(?:reply from|来自|bytes from)", re.IGNORECASE)
 
 OK, FAIL, IND = "ok", "fail", "ind"
 
