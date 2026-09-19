@@ -22,6 +22,7 @@ import { alertEngine } from './alerts.js';
 import { roster, CLASSES } from './roster.js';
 import { ingest, REASON_TEXT } from './ingest.js';
 import { demoFleet } from './demo.js';
+import { ztPresence } from './zerotier.js';
 import * as events from './events.js';
 
 // Overridable so the self-test can run a throwaway Server beside a live one.
@@ -56,6 +57,9 @@ events.attach(history, {
 // switched on before (roster meta) or explicitly pre-armed with HM_DEMO=1.
 demoFleet.attach(store);
 demoFleet.autoStart();
+
+// S5 §4: the presence poll is its own clock; it never touches the store.
+ztPresence.start();
 
 // ============================================================
 // Agent WebSocket Server (port 9100)
@@ -144,6 +148,10 @@ agentWss.on('connection', (ws, req) => {
 // Client HTTP + WebSocket Server (port 9101)
 // ============================================================
 const app = express();
+// Exported for the S5 credential-hygiene self-test, which reads the real route
+// table (S5 §3.1): "every mutating endpoint is behind the passphrase" has to be
+// something a test can enumerate, not something a reviewer hopes is true.
+export { app };
 app.use(cors());
 app.use(express.json());
 
@@ -200,20 +208,77 @@ app.get('/api/roster', (req, res) => {
 
 // Default-deny: with no passphrase configured every write is refused, so a
 // pass-by visitor can neither retire a node nor change its class (S1 §5.2).
+//
+// The budget below is not a login-throttle, it is the cost of the hash:
+// `checkPassphrase` runs scrypt, and this box is a low-power machine whose port
+// 9101 is open to the LAN. Without a cap, anyone with curl can spend our CPU on
+// every request (and guess for free). The check therefore happens BEFORE the
+// hash, and a blocked address gets an answer that costs us nothing.
+// Addresses are memory-only keys: never logged, never in an event row (S5 G3).
+const ADMIN_FAIL_WINDOW_MS = 60_000
+const ADMIN_FAIL_MAX = 8
+const ADMIN_BUDGET_MAX_KEYS = 512
+const adminFails = new Map();
+
+function failState(addr, now) {
+  const s = adminFails.get(addr)
+  if (!s || now > s.until) return null
+  return s
+}
+
+function adminBlocked(addr, now = Date.now()) {
+  const s = failState(addr, now)
+  return !!s && s.n >= ADMIN_FAIL_MAX
+}
+
+function noteAdminFail(addr, now = Date.now()) {
+  if (adminFails.size >= ADMIN_BUDGET_MAX_KEYS) {
+    for (const [k, v] of adminFails) if (v.until <= now) adminFails.delete(k)
+    // A box with more live addresses than the cap is not this deployment; drop
+    // the ledger rather than let it grow, because losing a throttle is a smaller
+    // failure than losing the process to OOM.
+    if (adminFails.size >= ADMIN_BUDGET_MAX_KEYS) adminFails.clear()
+  }
+  const s = failState(addr, now)
+  if (s) s.n += 1
+  else adminFails.set(addr, { n: 1, until: now + ADMIN_FAIL_WINDOW_MS })
+}
+
+/** Self-test hook. */
+export const _adminFails = adminFails;
+
 function requireAdmin(req, res, next) {
+  const addr = req.socket.remoteAddress || '?';
+  if (adminBlocked(addr)) {
+    return res.status(429).json({ error: '口令尝试过于频繁，请稍后再试' });
+  }
   if (!roster.hasPassphrase()) {
     return res.status(403).json({ error: '未设置管理口令，写操作已禁用' });
   }
   if (!roster.checkPassphrase(req.get('x-hm-admin'))) {
+    noteAdminFail(addr);
     return res.status(403).json({ error: '口令不正确' });
   }
+  adminFails.delete(addr);
   return next();
 }
 
+// The one endpoint that cannot sit behind its own gate: on a fresh install there
+// is no passphrase to present yet. It is still guarded - `setPassphrase` demands
+// the old one as soon as one exists - and it pays for the same scrypt, so it
+// shares the budget (S5 §3.1: this is the whitelist entry, with its reason).
 app.post('/api/admin/passphrase', (req, res) => {
+  const addr = req.socket.remoteAddress || '?';
+  if (adminBlocked(addr)) {
+    return res.status(429).json({ error: '口令尝试过于频繁，请稍后再试' });
+  }
   const { passphrase, old } = req.body || {};
   const r = roster.setPassphrase(passphrase, old);
-  if (!r.ok) return res.status(400).json({ error: r.error });
+  if (!r.ok) {
+    if (r.error === '原口令不正确') noteAdminFail(addr);
+    return res.status(400).json({ error: r.error });
+  }
+  adminFails.delete(addr);
   console.log('[Roster] Admin passphrase set');
   res.json({ ok: true });
 });
@@ -294,6 +359,28 @@ app.post('/api/admin/demo', requireAdmin, (req, res) => {
   const on = !!(req.body || {}).enabled;
   const r = demoFleet.setEnabled(on);
   res.json({ ok: r.ok, demo: demoFleet.info() });
+});
+
+// S5 §5.2: dead pairing codes are the one table that only ever grew. One sweep,
+// on the retention clock S3 established - not a second timer.
+history.onCleanup((db, now) => roster.purgeExpiredCodes(now));
+
+// ============================================================
+// S5 §4: the ZeroTier presence ledger. Read open (it carries no secret: the API
+// token never leaves its process), write behind the passphrase. It is a ledger
+// of *devices*, deliberately not part of `hosts`/`cluster`/`alerts`, so it can
+// neither reach the four-state merge nor the alert sound (S2.6 hard constraint).
+// ============================================================
+app.get('/api/presence', (req, res) => {
+  res.json(ztPresence.info());
+});
+
+app.post('/api/presence/alias', requireAdmin, (req, res) => {
+  const b = req.body || {};
+  const r = roster.setPresenceAlias(b.zt_addr, b.host_id ?? null, b.label ?? null);
+  if (!r.ok) return res.status(400).json({ error: r.error });
+  console.log(`[Presence] alias ${String(b.zt_addr).slice(0, 4)}… -> ${b.host_id || b.label || '(cleared)'}`);
+  res.json({ ok: true, presence: ztPresence.info() });
 });
 
 // Production hosting: serve the built client (client/dist) so the whole

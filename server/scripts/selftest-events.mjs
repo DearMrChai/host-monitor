@@ -318,6 +318,64 @@ ok('G4 刚注册还没到 absent_after 的节点不会被抢先判缺席（重�
     return !hosts.some((h) => h.host_id === 'fresh-box' && h.absent_record)
   })())
 
+// ---------- H. H18: silence *inside* this process must also fade to absent ----------
+// The S3 synthesis only covers "a node this process never saw". A box that was
+// here and then got switched off overnight used to stay a live OFFLINE record
+// forever (hosts is never pruned) = CRIT card + looping sound all night.
+roster.ensure('loud-box', { hostname: 'loud-box' })
+store.register('loud-box', { hostname: 'loud-box' })
+store.updateMetrics('loud-box', { cpu: { usage_percent: 40 }, memory: { percent: 50 } })
+roster.save({ ...roster.get('loud-box'), confirmed: 1, presence_class: 'persistent' })
+const hb = store.hosts.get('loud-box')
+const t0 = Date.now()
+/* `lastTickAt = 0` instead of calling advance() by hand: tick() overwrites
+   status.reasons with the debounced set, so an advance() on an already-ticked
+   array would read an empty reason list and prove nothing. Forcing the gate
+   open exercises the same path production takes. */
+hb.lastSeen = t0 - 20_000
+alertEngine.lastTickAt = 0
+store.getAnnotatedHosts()
+const liveOffline = alertEngine.getLists().active.find(
+  (a) => a.host_id === 'loud-box' && a.metric === 'offline')
+ok('H1 静默 20 秒仍是"实时失联"：CRIT 级告警活动，没有被抢先改判',
+  !!liveOffline && hb.absent_record !== true, JSON.stringify(liveOffline?.level))
+hb.lastSeen = t0 - 16 * 60_000
+alertEngine.lastTickAt = 0
+const hs2 = store.getAnnotatedHosts()
+const lists2 = alertEngine.getLists()
+const closedAbsent = lists2.resolved.find(
+  (a) => a.host_id === 'loud-box' && a.metric === 'offline')
+const c2 = evaluateCluster(hs2)
+ok('H2 越过 degrade 窗口即改判缺席：告警以 absent 闭合、活动列表清空、健康度不受它影响',
+  hb.absent_record === true && hb.absent_by === 'silence'
+  && closedAbsent?.cancelled === 'absent'
+  && !lists2.active.some((a) => a.host_id === 'loud-box')
+  && hs2.find((h) => h.host_id === 'loud-box').status.absent === true
+  && c2.total >= 1 && c2.online < c2.total,
+  JSON.stringify({ cancelled: closedAbsent?.cancelled, health: c2.health }))
+ok('H3 缺席仍计入在线率分母（拔电的常驻机不是"它出事了"，但也不能凭空消失）',
+  c2.total === evaluateCluster(store.getAnnotatedHosts().filter((h) => h.host_id !== 'loud-box')).total + 1)
+const absentRow = readAll().find((e) => e.code === 'absent' && e.host_id === 'loud-box')
+ok('H4 降级这件事本身进了 24h 流（措辞由读侧渲染，DB 只存事实）', !!absentRow)
+store.updateMetrics('loud-box', { cpu: { usage_percent: 12 }, memory: { percent: 30 } })
+const hs3 = store.getAnnotatedHosts()
+ok('H5 重新上报立刻撤销改判：回到实时记录，online=true',
+  hb.absent_record !== true && hb.online === true
+  && hs3.find((h) => h.host_id === 'loud-box')?.absent_record !== true)
+ok('H6 未确认/临时/道具节点不走降级（改判需要有人担保过这台机器）',
+  (() => {
+    roster.ensure('quiet-eph', { hostname: 'quiet-eph' })
+    store.register('quiet-eph', { hostname: 'quiet-eph' })
+    store.updateMetrics('quiet-eph', { cpu: { usage_percent: 5 } })
+    const row = roster.get('quiet-eph')
+    roster.save({ ...row, confirmed: 1, presence_class: 'ephemeral' })
+    store.hosts.get('quiet-eph').lastSeen = Date.now() - 40 * 60_000
+    store.getAnnotatedHosts()
+    const stillEphemeral = store.hosts.get('quiet-eph').absent_record !== true
+    roster.setClass('quiet-eph', 'retired')
+    return stillEphemeral
+  })())
+
 // ---------- F. end to end against a real Server on throwaway ports ----------
 const CHILD_ENV = {
   ...process.env,

@@ -7,6 +7,8 @@ dist/
 .DS_Store
 # 真实内网探测目标（含局域网 IP），提交用 probes.example.json 占位
 server/src/config/probes.json
+# S5 presence 台账：内含本机 ZT 端口与排除节点 id（属于"这台机器是谁"的信息）
+server/src/config/zt.json
 # P5 持久化：SQLite 库文件 + 本地调参配置（模板见 history.example.json）
 server/data/
 server/src/config/history.json

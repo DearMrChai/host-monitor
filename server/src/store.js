@@ -19,6 +19,11 @@ function presenceCfg() {
   return {
     enabled: p.enabled !== false,
     absentAfterMs: (Number(p.absent_after_minutes) || 3) * 60_000,
+    // Two thresholds, two different questions (H18). `absent_after_minutes`
+    // asks "has this node been missing longer than a restart window" - it is
+    // about the roster rows this process never saw. `degrade_after_minutes`
+    // asks "how long do I keep shouting about a machine I watched go quiet".
+    degradeAfterMs: (Number(p.degrade_after_minutes) || 15) * 60_000,
   };
 }
 
@@ -82,13 +87,38 @@ class MonitorStore {
     if (host) host.online = false;
   }
 
-  checkTimeouts() {
-    const now = Date.now();
+  checkTimeouts(now = Date.now()) {
+    const { degradeAfterMs } = presenceCfg();
     for (const [, host] of this.hosts) {
-      if (host.online && (now - host.lastSeen) > OFFLINE_TIMEOUT_MS) {
-        host.online = false;
+      const silent = now - host.lastSeen;
+      if (host.online && silent > OFFLINE_TIMEOUT_MS) host.online = false;
+      /* H18: a machine that went quiet *while this process was running* used to
+         stay a live OFFLINE record forever, because `hosts` is never pruned - so
+         shutting a box down overnight meant a CRIT card, a looping sound and a
+         hit to the health roll-up for a machine that simply stopped being here.
+         Past the degrade window it becomes an absence record, i.e. it takes the
+         exact path S3 §4.2 already built: no reasons, alert closed as
+         `cancelled='absent'`, out of health, still in the online denominator.
+         Not removed from the table: "3 常驻，现在在 1 台" must stay true. */
+      const degrade = silent > degradeAfterMs && this.#degradable(host);
+      if (degrade && !host.absent_record) {
+        host.absent_record = true;
+        host.absent_by = 'silence';
+      } else if (!degrade && host.absent_record && host.absent_by === 'silence') {
+        host.absent_record = false;
+        host.absent_by = null;
       }
     }
+  }
+
+  /** Only a node a human vouched for can be re-judged as absent (H18): an
+   *  unconfirmed arrival or a demo prop going quiet says nothing about the fleet. */
+  #degradable(host) {
+    const node = roster.get(host.host_id);
+    if (!node || !node.confirmed) return false;
+    if (node.presence_class !== 'persistent') return false;
+    if (node.kind !== 'agent') return false;
+    return true;
   }
 
   getAllHosts() {
@@ -169,6 +199,8 @@ class MonitorStore {
         last_seen: last,
         registeredAt: last,
         absent_record: true,
+        // Which of the two absences this is: the card wording differs (S5 §5.1).
+        absent_by: 'restart',
       });
     }
     return out;

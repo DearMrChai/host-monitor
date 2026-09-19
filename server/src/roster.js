@@ -17,7 +17,7 @@
  *               stays queryable by host_id
  */
 import { DatabaseSync } from 'node:sqlite'
-import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
+import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
 import { existsSync, readFileSync, mkdirSync } from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
@@ -32,10 +32,43 @@ export const KINDS = ['agent', 'demo', 'observed']
 // last_seen hits the disk at most this often per node (S1 §7: no DB churn on
 // the 2s metrics path; the in-memory store is authoritative for "now").
 const SEEN_WRITE_MS = 30_000
+// Same idea for the presence ledger, which is polled (S5 §4.2).
+const PRESENCE_WRITE_MS = 60_000
 // Name prefixes for demo nodes are enforced server-side, never by convention
 // (S1 §6 - honesty rule: aggregates must stay explainable).
 const DEMO_PREFIX = '模拟-'
 const PASS_MIN_LEN = 4
+/** On-disk shape of a stored node key (S5 §2). A pre-S5 row holds the bare
+ *  32-hex key, which `keyMatches` still accepts and rewrites on the spot. */
+const KEY_PREFIX = 'sha256$'
+
+/**
+ * Node keys are 128-bit random values, not human-chosen secrets, and
+ * `keyMatches` runs on the Agent reconnect path of a low-power box — so a salted
+ * SHA-256 is the right call here and scrypt would be the wrong one (80ms per
+ * reconnect buys nothing against a 2^128 space). The admin passphrase right
+ * below deliberately keeps scrypt: that one IS dictionary-attackable.
+ * Different strategies on two adjacent lines are intentional, not an oversight.
+ */
+function hashNodeKey(plain, saltHex = randomBytes(16).toString('hex')) {
+  return `${KEY_PREFIX}${saltHex}$${createHash('sha256').update(`${saltHex}:${plain}`).digest('hex')}`
+}
+
+function timingSafeEq(a, b) {
+  const x = Buffer.from(String(a)), y = Buffer.from(String(b))
+  return x.length === y.length && timingSafeEqual(x, y)
+}
+
+/** Does this candidate key satisfy this stored value? Accepts the pre-S5
+ *  plaintext form so a rollback or a half-migrated DB never locks an Agent out;
+ *  callers upgrade the row when it matches (roster.keyMatches / #migratePlainKeys). */
+function keyMatchesStored(stored, plain) {
+  if (!stored || typeof plain !== 'string' || !plain) return false
+  if (!String(stored).startsWith(KEY_PREFIX)) return timingSafeEq(stored, plain)
+  const parts = String(stored).split('$')
+  if (parts.length !== 3 || !parts[1]) return false
+  return timingSafeEq(hashNodeKey(plain, parts[1]), stored)
+}
 
 /** Roster DB file. HM_ROSTER_DB lets the self-test point at a throwaway file. */
 function resolveRosterDb() {
@@ -105,6 +138,22 @@ class Roster {
         note        TEXT,
         paired_ids  TEXT NOT NULL DEFAULT ''
       );
+      /* S5 §4.2: the ZeroTier presence ledger lives here too, because this is the
+         only roster.db writer. It is a *ledger*, not a node table - nothing in
+         store.js / status.js / alerts.js may read it (S5 G4). */
+      CREATE TABLE IF NOT EXISTS presence_alias (
+        zt_addr    TEXT PRIMARY KEY,
+        host_id    TEXT,
+        label      TEXT,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS presence_state (
+        zt_addr      TEXT PRIMARY KEY,
+        name         TEXT,
+        first_seen   INTEGER NOT NULL,
+        last_seen    INTEGER NOT NULL,
+        last_latency INTEGER
+      );
     `)
 
     this.insert = this.db.prepare(`
@@ -121,6 +170,7 @@ class Roster {
     // Full in-memory copy: the 2s broadcast path reads this, never SQL.
     this.cache = new Map()
     this.reload()
+    this.#migratePlainKeys()
 
     this.seeded = this.#seedFromHistory()
     console.log(`[Roster] ${this.dbFile} (${this.cache.size} node(s)` +
@@ -135,6 +185,32 @@ class Roster {
     for (const row of this.db.prepare('SELECT * FROM nodes').all()) {
       this.cache.set(row.host_id, row)
     }
+  }
+
+  /** S5 §2: pre-S5 builds wrote the node key in plaintext. The plaintext is in
+   *  hand right now, so the sweep needs no Agent and no re-pairing — after it,
+   *  a stolen `roster.db` buys an attacker nothing they can put on the wire.
+   *
+   *  The rewrite alone is not enough for G1: SQLite leaves the old row image in
+   *  a freed page and in the -wal file, where `strings roster.db` still finds
+   *  it. So the sweep checkpoints and vacuums once — on a table this size that
+   *  is milliseconds, and it is what makes "静态盘上读不到" actually true. */
+  #migratePlainKeys() {
+    let n = 0
+    for (const node of this.cache.values()) {
+      const stored = node.enroll_token
+      if (!stored || stored.startsWith(KEY_PREFIX)) continue
+      this.save({ ...node, enroll_token: hashNodeKey(stored) })
+      n += 1
+    }
+    if (!n) return
+    try {
+      this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)')
+      this.db.exec('VACUUM')
+    } catch (err) {
+      console.log(`[Roster] key migration sweep skipped: ${err.message}`)
+    }
+    console.log(`[Roster] Migrated ${n} plaintext node key(s) to salted hashes (S5 G1)`)
   }
 
   /** S1 §4: host_ids that already have history come back as persistent, so the
@@ -181,10 +257,13 @@ class Roster {
     if (info.hostname && info.hostname !== node.hostname) patch.hostname = info.hostname
     if (info.role && info.role !== node.role) patch.role = info.role
     if (info.agent_version && info.agent_version !== node.agent_version) patch.agent_version = info.agent_version
-    // Only the server-minted node key lands here. The pairing code a frame may
-    // carry is a spend-once voucher (see consumeEnroll) - storing it as the
-    // node's credential would let the same code re-authorise forever.
-    if (info.node_key && info.node_key !== node.enroll_token) patch.enroll_token = info.node_key
+    // Only the server-minted node key lands here, and it lands **hashed** (S5 §2).
+    // The pairing code a frame may carry is a spend-once voucher (see
+    // consumeEnroll) - storing it as the node's credential would let the same
+    // code re-authorise forever.
+    if (info.node_key && !keyMatchesStored(node.enroll_token, info.node_key)) {
+      patch.enroll_token = hashNodeKey(info.node_key)
+    }
     if (info.fingerprint && info.fingerprint !== node.fingerprint) patch.fingerprint = info.fingerprint
     if (info.confirmed && !node.confirmed) patch.confirmed = 1
     if (Object.keys(patch).length) {
@@ -211,7 +290,7 @@ class Roster {
       enrolled_at: now,
       last_seen: lastSeen ?? now,
       agent_version: info.agent_version || null,
-      enroll_token: info.node_key || null,
+      enroll_token: info.node_key ? hashNodeKey(info.node_key) : null,
       fingerprint: info.fingerprint || null,
       settings_json: '{}',
     }
@@ -322,15 +401,35 @@ class Roster {
       detail: { tail: code ? String(code).slice(-4) : '?' } })
   }
 
+  /**
+   * Dead pairing codes are the one table that only ever grew: a code is spent or
+   * expires, and nothing after that reads it (`activeCodes` filters on
+   * expires_at, and the plaintext was shown exactly once). Registered on the
+   * history retention clock (S3: one sweep, not four). The audit trail for a
+   * code lives in `events`, so dropping the row loses no history (S5 §5.2).
+   */
+  purgeExpiredCodes(now = Date.now(), keepDays = 30) {
+    const cut = now - keepDays * 86_400_000
+    const r = this.db.prepare('DELETE FROM enroll_codes WHERE expires_at <= ?').run(cut)
+    if (r.changes) console.log(`[Roster] retention: -${r.changes} dead enroll code(s)`)
+    return r.changes
+  }
+
   newNodeKey() { return randomBytes(16).toString('hex') }
+  /** The stored (hashed) value. Not a credential and not usable as one — kept
+   *  public only because `keylessAgents`/`has_credential` read its presence. */
   nodeKeyOf(hostId) { return this.cache.get(hostId)?.enroll_token || null }
 
-  /** Standing per-node credential check (timing-safe; null key never matches). */
+  /** Standing per-node credential check. A match against a pre-S5 plaintext row
+   *  upgrades that row on the spot, so the migration never has a cold window. */
   keyMatches(hostId, key) {
-    const want = this.nodeKeyOf(hostId)
-    if (!want || typeof key !== 'string' || !key) return false
-    const a = Buffer.from(want), b = Buffer.from(key)
-    return a.length === b.length && timingSafeEqual(a, b)
+    const node = this.cache.get(hostId)
+    if (!node) return false
+    const ok = keyMatchesStored(node.enroll_token, key)
+    if (ok && !String(node.enroll_token).startsWith(KEY_PREFIX)) {
+      this.save({ ...node, enroll_token: hashNodeKey(key) })
+    }
+    return ok
   }
 
   /** Roster nodes without a key: the v1 Agents still reporting tokenlessly. */
@@ -478,6 +577,64 @@ class Roster {
   demoEnabledStored() {
     const v = this.#metaGet('demo_enabled')
     return v === null ? null : v === '1'
+  }
+
+  // ---------- presence ledger (S5 §4) ----------
+  //
+  // Deliberately the *storage* half only: what counts as "present" is decided in
+  // zerotier.js, and nothing in the four-state path (store.js / status.js /
+  // alerts.js) may import any of it. A ZeroTier peer is a ledger row, not a node.
+
+  static ZT_ADDR_RE = /^[0-9a-f]{10}$/
+
+  presenceAliases() {
+    const out = new Map()
+    for (const r of this.db.prepare('SELECT * FROM presence_alias').all()) {
+      out.set(r.zt_addr, r)
+    }
+    return out
+  }
+
+  /**
+   * Bind a ZeroTier peer to a roster node (or just name it). `host_id: null`
+   * clears the binding; with no binding and no label left, the row goes away.
+   */
+  setPresenceAlias(ztAddr, hostId = null, label = null, now = Date.now()) {
+    const addr = String(ztAddr || '').trim().toLowerCase()
+    if (!Roster.ZT_ADDR_RE.test(addr)) return { ok: false, error: 'ZT 地址格式不正确' }
+    const hid = hostId ? String(hostId).trim() : null
+    if (hid && !this.cache.has(hid)) return { ok: false, error: '名册里没有这个节点' }
+    const lab = label ? String(label).trim().slice(0, 40) : null
+    if (!hid && !lab) {
+      this.db.prepare('DELETE FROM presence_alias WHERE zt_addr = ?').run(addr)
+      return { ok: true, cleared: true }
+    }
+    this.db.prepare(`
+      INSERT INTO presence_alias (zt_addr, host_id, label, updated_at) VALUES (?,?,?,?)
+      ON CONFLICT(zt_addr) DO UPDATE SET host_id=excluded.host_id,
+        label=excluded.label, updated_at=excluded.updated_at`).run(addr, hid, lab, now)
+    return { ok: true, alias: { zt_addr: addr, host_id: hid, label: lab } }
+  }
+
+  presenceStates() {
+    return this.db.prepare('SELECT * FROM presence_state ORDER BY last_seen DESC').all()
+  }
+
+  /** Throttled per peer: the poll is 30s, the disk does not need every one. */
+  notePresence({ ztAddr, name = null, latency = null }, now = Date.now()) {
+    const addr = String(ztAddr || '').toLowerCase()
+    if (!Roster.ZT_ADDR_RE.test(addr)) return false
+    if (!this._presenceWrites) this._presenceWrites = new Map()
+    const last = this._presenceWrites.get(addr) || 0
+    if (now - last < PRESENCE_WRITE_MS) return false
+    this._presenceWrites.set(addr, now)
+    this.db.prepare(`
+      INSERT INTO presence_state (zt_addr, name, first_seen, last_seen, last_latency)
+      VALUES (?,?,?,?,?)
+      ON CONFLICT(zt_addr) DO UPDATE SET name=excluded.name,
+        last_seen=excluded.last_seen, last_latency=excluded.last_latency`)
+      .run(addr, name, now, now, latency == null ? null : Math.round(latency))
+    return true
   }
 
   // ---------- admin passphrase (S1 §5.2: default deny) ----------

@@ -13,8 +13,12 @@
     "history_capacity": 200,
     "tick_ms": 1800
   },
+  "events": {
+    "merge_seconds": 60
+  },
   "presence": {
     "enabled": true,
-    "absent_after_minutes": 3
+    "absent_after_minutes": 3,
+    "degrade_after_minutes": 15
   }
 }

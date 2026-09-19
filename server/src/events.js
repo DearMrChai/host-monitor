@@ -30,14 +30,18 @@
  * means record() is a no-op and read() returns nothing - which is exactly the
  * `history.enabled: false` dev mode, not a failure.
  */
+import { thresholds } from './status.js'
 
 const WINDOWS = { '2h': 7_200_000, '24h': 86_400_000, '7d': 604_800_000 }
 const DEFAULT_LIMIT = 120
 const MAX_LIMIT = 400
 // Repeats of the same (code, host) inside this window bump `count` instead of
 // adding a row: a machine stuck in a supervisor restart loop is ONE line about a
-// broken enrolment, not three hundred lines (S3 §3.2).
-const MERGE_MS = 60_000
+// broken enrolment, not three hundred lines (S3 §3.2). Local-tunable because the
+// right value depends on how noisy a fleet is - a 3-node home bench and a 30-node
+// one do not want the same window (S5, alongside H18's thresholds).
+const MERGE_MS = Math.min(Math.max(
+  (Number(thresholds.events?.merge_seconds) || 60) * 1000, 5_000), 3_600_000)
 // Absence is announced once per episode; a node that stays away for a day gets
 // one line, not a daily reminder.
 const ABSENT_ONCE_MS = 6 * 3_600_000

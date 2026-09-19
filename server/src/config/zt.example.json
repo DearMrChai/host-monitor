@@ -1,0 +1,8 @@
+{
+  "enabled": true,
+  "poll_seconds": 30,
+  "api_port": 9993,
+  "timeout_ms": 4000,
+  "token_file": "",
+  "exclude": []
+}

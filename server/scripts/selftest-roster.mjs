@@ -101,12 +101,15 @@ roster.setMute('new-1', null)
    same column). Keep asserting BOTH halves of the promise: the secret never
    leaves the process, and the public projection still tells the UI whether the
    node has one - otherwise a typo silently turns this test into a no-op. */
-ok('A12 publicOf 不泄漏 enroll_token / fingerprint', (() => {
+ok('A12 publicOf 不泄漏 enroll_token / fingerprint（S5 G1：库里也没有明文）', (() => {
   roster.ensure('sec-1', { hostname: 'sec', node_key: 'tok-secret', fingerprint: 'fp-secret' })
   const n = roster.get('sec-1')
   const pub = JSON.stringify(roster.publicOf('sec-1'))
   return !pub.includes('tok-secret') && !pub.includes('fp-secret')
-    && n.enroll_token === 'tok-secret' && !!n.fingerprint
+    && !String(n.enroll_token).includes('tok-secret') && !!n.fingerprint
+    && roster.keyMatches('sec-1', 'tok-secret')
+    && roster.keyMatches('sec-1', 'tok-wrong') === false
+    && roster.keyMatches('sec-1', '') === false
     && roster.publicOf('sec-1').has_credential === true
 })())
 
@@ -553,8 +556,9 @@ store.register('pair-1', {
   hostname: 'PairBox', kind: 'agent', node_key: v1.node_key, confirmed: true,
   agent_version: '2.0.0', fingerprint: 'fp-a',
 })
-ok('F4b 配对即确认：不再进待确认引导，且名册记住了密钥',
-  roster.nodeKeyOf('pair-1') === v1.node_key
+ok('F4b 配对即确认：不再进待确认引导，密钥已认、但库里存的是哈希（S5 G1）',
+  roster.keyMatches('pair-1', v1.node_key) === true
+  && roster.nodeKeyOf('pair-1') !== v1.node_key
   && roster.publicOf('pair-1').confirmed === true
   && roster.publicOf('pair-1').has_credential === true)
 ok('F4c 密钥不出现在任何公开投影',
