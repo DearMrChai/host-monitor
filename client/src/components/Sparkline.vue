@@ -73,8 +73,8 @@ const hasData = computed(() => segments.value.length > 0)
 /* Direction colours are NOT the four-state palette (S3 §6.3). A rising load is
    not a warning, and borrowing --orange/--red for it would teach the eye that
    the top-right corner of a card is an alarm. */
-.spark.up .sp-svg, .spark.up .sp-delta { color: #8b5cf6; }
-.spark.down .sp-svg, .spark.down .sp-delta { color: #0d9488; }
+.spark.up .sp-svg, .spark.up .sp-delta { color: var(--up); }
+.spark.down .sp-svg, .spark.down .sp-delta { color: var(--down); }
 .spark.flat .sp-svg { color: var(--text3); }
 .spark.flat .sp-delta { color: var(--text3); }
 </style>

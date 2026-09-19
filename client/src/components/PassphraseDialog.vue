@@ -91,13 +91,13 @@ async function submit() {
 .pd-head { display: flex; align-items: center; justify-content: space-between; font-size: 14px; }
 .pd-x { border: none; background: none; font-size: 18px; cursor: pointer; color: var(--text3); }
 .pd-sub { margin: 0; font-size: 12px; color: var(--text2); line-height: 1.5; }
-.pd-reason { margin: 0; font-size: 12px; color: #9a6700; }
+.pd-reason { margin: 0; font-size: 12px; color: var(--warn-ink); }
 .pd label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text2); }
 .pd input {
   font: inherit; font-size: 13px; padding: 6px 8px;
   border: 1px solid var(--border); border-radius: 7px; background: rgba(255,255,255,.6);
 }
-.pd-err { margin: 0; font-size: 12px; color: #b62324; }
+.pd-err { margin: 0; font-size: 12px; color: var(--crit-ink); }
 .pd-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 2px; }
 .pd-actions button {
   font: inherit; font-size: 12px; padding: 5px 14px; cursor: pointer;

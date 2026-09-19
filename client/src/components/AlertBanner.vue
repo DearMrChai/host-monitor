@@ -40,7 +40,7 @@ const more = computed(() => Math.max(0, crits.value.length - 2))
   display: flex; align-items: center; gap: 10px;
   margin: 10px 14px 0; padding: 10px 14px; cursor: pointer;
   background: rgba(248, 81, 73, 0.10); border: 1px solid rgba(248, 81, 73, 0.5);
-  border-radius: 8px; color: #b62324;
+  border-radius: 8px; color: var(--crit-ink);
 }
 .bn-icon { width: 10px; height: 10px; border-radius: 50%; background: var(--red); animation: blink 1s infinite; flex-shrink: 0; }
 @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
@@ -53,7 +53,7 @@ const more = computed(() => Math.max(0, crits.value.length - 2))
 .banner-chip {
   position: absolute; top: 12px; right: 14px; z-index: 30;
   font-size: 12px; padding: 4px 10px; cursor: pointer;
-  background: var(--bg-glass); border: 1px solid var(--red); color: #b62324;
+  background: var(--bg-glass); border: 1px solid var(--red); color: var(--crit-ink);
   border-radius: 12px;
 }
 </style>

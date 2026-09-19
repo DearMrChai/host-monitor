@@ -322,9 +322,9 @@ const keyless = computed(() => admin.keylessAgents || [])
 .enroll { height: 100%; overflow: auto; padding: 14px; display: flex; flex-direction: column; gap: 12px; }
 .en-mode {
   font-size: 12px; padding: 7px 12px; border-radius: 8px;
-  border: 1px solid var(--orange); color: #9a6700; background: rgba(210,153,34,.08);
+  border: 1px solid var(--orange); color: var(--warn-ink); background: rgba(210,153,34,.08);
 }
-.en-mode.off { border-color: var(--red); color: #b62324; background: rgba(248,81,73,.08); }
+.en-mode.off { border-color: var(--red); color: var(--crit-ink); background: rgba(248,81,73,.08); }
 .en-body { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 14px; align-items: start; }
 .en-col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
 .en-card {
@@ -371,7 +371,7 @@ button { font: inherit; }
 }
 .cl-row code { font-family: ui-monospace, Consolas, monospace; color: var(--text); }
 .cl-note { color: var(--text3); }
-.cl-ok { color: #1a7f37; }
+.cl-ok { color: var(--ok-ink); }
 .en-x {
   margin-left: auto; font-size: 11px; cursor: pointer; padding: 2px 9px; border-radius: 11px;
   border: 1px solid var(--border); background: var(--bg-glass); color: var(--text2);
@@ -399,7 +399,7 @@ button { font: inherit; }
 .ej {
   display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px;
   padding: 4px 10px; border-radius: 14px; border: 1px solid var(--green); background: rgba(30,140,50,.08);
-  color: #1a7f37;
+  color: var(--ok-ink);
 }
 .ej i { font-style: normal; font-size: 10px; color: var(--text3); }
 .en-empty { font-size: 12px; color: var(--text3); }
@@ -408,15 +408,15 @@ button { font: inherit; }
 .kl {
   display: inline-flex; align-items: center; gap: 4px; cursor: pointer;
   font-size: 11px; padding: 2px 9px; border-radius: 10px;
-  border: 1px dashed var(--orange); color: #9a6700; background: rgba(210,153,34,.06);
+  border: 1px dashed var(--orange); color: var(--warn-ink); background: rgba(210,153,34,.06);
 }
 .kl i { font-style: normal; font-size: 10px; color: var(--text3); }
 .en-demo { display: flex; align-items: center; gap: 10px; }
 .en-stop {
   font-size: 12px; cursor: pointer; padding: 5px 14px; border-radius: 14px;
-  border: 1px solid var(--red); background: rgba(248,81,73,.08); color: #b62324;
+  border: 1px solid var(--red); background: rgba(248,81,73,.08); color: var(--crit-ink);
 }
-.dm-state { font-size: 11px; color: #1a7f37; }
+.dm-state { font-size: 11px; color: var(--ok-ink); }
 .dm-state.off { color: var(--text3); }
 .en-card p b { color: var(--text2); }
 @media (max-width: 900px) {

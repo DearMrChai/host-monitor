@@ -16,6 +16,23 @@
   --orange: #d29922;
   --red: #f85149;
   --radius: 8px;
+
+  /* S4 §1.1: the four states, and the three "ink" values they need on paper.
+     A state has two sanctioned colours and no more: the face (bar, dot, border)
+     and the text. The faces are too light to read as type on a #f5f0e6 ground,
+     and before this pair existed every component darkened them by eye - 39
+     literals across 11 files, which is how "one fact, one source" dies.
+     Any new colour must first answer S4 §1.1 rule 1 (which state dimension does
+     it carry); if it has no answer it gets a grey. */
+  --ok-ink: #1a7f37;
+  --warn-ink: #9a6700;
+  --crit-ink: #b62324;
+
+  /* Delta direction. Deliberately outside the four-state palette (S3b): if a
+     rising number were red, "is it going up" and "is it in trouble" would share
+     one channel and the loudest reading would always be the pessimistic one. */
+  --up: #8b5cf6;
+  --down: #0d9488;
 }
 
 html, body, #app {

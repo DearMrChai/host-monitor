@@ -11,7 +11,7 @@ const props = defineProps({
   unit: { type: String, default: '' },
   warn: { type: Number, default: null },
   crit: { type: Number, default: null },
-  color: { type: String, default: '#0969da' },
+  color: { type: String, default: 'var(--accent)' },
 })
 
 const W = 260, H = 64
@@ -52,7 +52,10 @@ const fmtT = (ts) => new Date(ts).toLocaleTimeString('zh-CN', { hour: '2-digit',
       <svg :viewBox="`0 0 ${W} ${H}`" preserveAspectRatio="none" class="trend-svg">
         <line v-if="view.warnY" :y1="view.warnY" :y2="view.warnY" x1="0" :x2="W" class="th-warn" />
         <line v-if="view.critY" :y1="view.critY" :y2="view.critY" x1="0" :x2="W" class="th-crit" />
-        <polyline :points="view.line" :stroke="color" class="trend-line" />
+        <!-- stroke via style, not attribute: `color` is a CSS custom property so
+             the series colour has one definition like everything else (S4 §1.2),
+             and presentation attributes do not resolve var(). -->
+        <polyline :points="view.line" :style="{ stroke: color }" class="trend-line" />
       </svg>
       <div class="trend-time">
         <span>{{ fmtT(view.t0) }}</span>

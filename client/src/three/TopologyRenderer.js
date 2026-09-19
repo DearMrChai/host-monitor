@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js'
+import { GROUND, NEUTRAL, toRGB } from '../lib/palette.js'
 
 /**
  * TopologyRenderer (v3 - Realistic PCB)
@@ -122,7 +123,7 @@ export class TopologyRenderer {
 
   _initScene() {
     this.scene = new THREE.Scene()
-    this.scene.background = new THREE.Color('#f5f0e6')
+    this.scene.background = new THREE.Color(GROUND.bg)
 
     this.camera = new THREE.PerspectiveCamera(42, 1, 0.1, 200)
     this.camera.position.set(18, 22, 26)
@@ -386,7 +387,7 @@ export class TopologyRenderer {
     const ihsTopY = subTopY + ihsH
 
     // --- Printed text on IHS top ---
-    const tex = this._makeCpuTexture(cpu.model)
+    const tex = this._makeCpuTexture(cpu)
     const textMat = new THREE.MeshBasicMaterial({ map: tex, transparent: true })
     const textPlane = new THREE.Mesh(new THREE.PlaneGeometry(ihsW * 0.85, ihsD * 0.85), textMat)
     textPlane.rotation.x = -Math.PI / 2
@@ -428,8 +429,20 @@ export class TopologyRenderer {
     return s
   }
 
-  /** Canvas texture with printed CPU markings (like real lid text). */
-  _makeCpuTexture(model) {
+  /**
+   * Canvas texture with printed CPU markings (like real lid text).
+   *
+   * Only what the Agent actually reported may be printed here. The previous
+   * version stamped `SRK2L  3.50GHZ` and `L123B456` - an sSpec code, a clock and
+   * a batch serial, all hand-written constants, on a component that is otherwise
+   * labelled with the user's real processor (S4 §3.1). A detail view that prints
+   * a plausible fake is worse than one that prints less, because it teaches the
+   * viewer that this panel's part numbers are trustworthy. Missing line = blank.
+   */
+  _makeCpuTexture(cpu) {
+    const model = typeof cpu === 'string' ? cpu : cpu?.model
+    const threads = typeof cpu === 'object' ? cpu?.cores : null
+    const physical = typeof cpu === 'object' ? cpu?.cores_physical : null
     const cv = document.createElement('canvas')
     cv.width = 256; cv.height = 256
     const ctx = cv.getContext('2d')
@@ -444,8 +457,12 @@ export class TopologyRenderer {
     ctx.fillText(m, 128, 124)
     ctx.font = '15px monospace'
     ctx.fillStyle = '#6a6a6a'
-    ctx.fillText('SRK2L  3.50GHZ', 128, 158)
-    ctx.fillText('L123B456', 128, 182)
+    // Reported by the Agent (psutil cpu_count), unlike the sSpec/serial this
+    // replaced. Both halves may be absent on an old Agent - then the line stays
+    // empty rather than being filled with something that looks like a marking.
+    if (threads) {
+      ctx.fillText(physical ? `${threads} 线程 · ${physical} 物理核` : `${threads} 线程`, 128, 158)
+    }
     const tex = new THREE.CanvasTexture(cv)
     tex.colorSpace = THREE.SRGBColorSpace
     return tex
@@ -1008,14 +1025,19 @@ export class TopologyRenderer {
         ? (comp.containers || []).map((c) => c.fillMat)
         : [comp.ihsMat, comp.shroudMat, comp.ssdMat].filter(Boolean)
       for (const m of mats) {
-        m.emissive.setHex(0xff2200)
+        m.emissive.setHex(toRGB(NEUTRAL.alarm))
         m.emissiveIntensity = 0.4 + blink * 0.6
       }
     }
-    // Subtle trace shimmer
+    // Subtle trace shimmer. The previous form fed its own output back into
+    // `emissiveIntensity` once per frame with only a lower clamp, so a page left
+    // open for a day drifted: the glow was no longer the traffic it encoded
+    // (S4 §1.1 rule 1 - a channel that moves on its own is not carrying state).
+    // Shimmer is now derived from the value the data set, never accumulated.
     for (const link of this.links) {
       const shimmer = Math.sin(t * 1.2 + link.from.x * 0.5) * 0.04
-      link.mat.emissiveIntensity = Math.max(0.1, link.mat.emissiveIntensity + shimmer * 0.01)
+      const base = link.baseIntensity ?? 0.2
+      link.mat.emissiveIntensity = Math.max(0.1, base + shimmer)
     }
     this.controls.update()
     this.renderer.render(this.scene, this.camera)

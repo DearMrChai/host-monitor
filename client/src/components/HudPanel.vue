@@ -202,15 +202,15 @@ const uptimeText = computed(() => {
 .dot.crit { background: var(--red); }
 .dot.none { background: transparent; border: 1px solid var(--border); }
 .hud-alert { display: flex; gap: 6px; align-items: baseline; font-size: 11px; color: var(--text2); padding: 3px 4px; }
-.hud-alert.crit { color: #b62324; }
-.hud-alert.warn { color: #9a6700; }
+.hud-alert.crit { color: var(--crit-ink); }
+.hud-alert.warn { color: var(--warn-ink); }
 .hud-alert.done { opacity: .65; }
 .hud-offline { font-size: 12px; color: var(--text2); padding: 16px 0; }
 .hud-absent { font-size: 12px; color: var(--text2); padding: 16px 0; line-height: 1.6; }
 .hud-absent em { display: block; font-style: normal; font-size: 11px; color: var(--text3); }
 .hud-class {
   font-style: normal; font-size: 10px; border-radius: 8px; padding: 0 6px;
-  color: #1a7f37; background: rgba(30,140,50,.10);
+  color: var(--ok-ink); background: rgba(30,140,50,.10);
 }
 .hud-class.ephemeral { color: var(--text2); background: rgba(0,0,0,.05); border: 1px dashed var(--border); }
 .hud-muted { font-style: normal; font-size: 11px; }

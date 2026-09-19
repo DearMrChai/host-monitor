@@ -139,7 +139,7 @@ export default { name: 'EventStream', emits: ['open'] }
 }
 .es-kinds button.on { border-color: var(--accent); color: var(--accent); background: rgba(9,105,218,.08); }
 .es-at { margin-left: auto; font-size: 10px; color: var(--text3); }
-.es-at.err { color: #b62324; }
+.es-at.err { color: var(--crit-ink); }
 
 .es-empty { font-size: 11px; color: var(--text3); padding: 10px 2px; }
 
@@ -156,8 +156,8 @@ export default { name: 'EventStream', emits: ['open'] }
 .es-time { color: var(--text3); flex-shrink: 0; font-variant-numeric: tabular-nums; }
 .es-who { font-weight: 600; flex-shrink: 0; max-width: 92px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .es-text { color: var(--text2); flex: 1; min-width: 0; }
-.es-list li.warn .es-text { color: #9a6700; }
-.es-list li.crit .es-text { color: #b62324; }
+.es-list li.warn .es-text { color: var(--warn-ink); }
+.es-list li.crit .es-text { color: var(--crit-ink); }
 .es-count { font-size: 10px; color: var(--text3); flex-shrink: 0; }
 
 .es-more { font-size: 10px; color: var(--text3); }

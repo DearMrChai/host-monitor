@@ -115,8 +115,8 @@ const trendSeries = computed(() => {
       const l = h.link?.[s.target]
       if (!l) return []
       return [
-        { label: 'RTT', unit: 'ms', vals: l.rtt, ...th.rtt_ms, color: '#0969da' },
-        { label: '丢包', unit: '%', vals: l.loss, ...th.packet_loss, color: '#f85149' },
+        { label: 'RTT', unit: 'ms', vals: l.rtt, ...th.rtt_ms, color: 'var(--accent)' },
+        { label: '丢包', unit: '%', vals: l.loss, ...th.packet_loss, color: 'var(--red)' },
       ]
     }
   }
@@ -183,7 +183,7 @@ const fmtDur = (ms) => {
               '可用': m.memory.available_gb + ' GB', '占用率': m.memory.percent + '%',
             })" :key="k"><b>{{ k }}</b><span>{{ v }}</span></div>
         </div>
-        <div class="dw-note">内存按池呈现（双通道 interleave，单条占用不可测——产品方案 §1.3）</div>
+        <div class="dw-note">内存按池呈现：地址在通道间 interleave，单条占用不可测，所以只有总量与总占用是实测值</div>
       </div>
 
       <!-- Disks -->

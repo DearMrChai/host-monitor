@@ -87,7 +87,7 @@ async function classify(node, cls) {
   font-size: 12px; color: var(--text2);
   background: rgba(210,153,34,.08); border: 1px dashed var(--orange); border-radius: 8px;
 }
-.og-lead { flex-shrink: 0; font-weight: 600; color: #9a6700; }
+.og-lead { flex-shrink: 0; font-weight: 600; color: var(--warn-ink); }
 .og-lead em { font-style: normal; font-weight: 400; font-size: 11px; color: var(--text3); margin-left: 6px; }
 .og-item { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 .og-item b { font-size: 12px; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

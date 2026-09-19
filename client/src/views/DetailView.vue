@@ -27,53 +27,82 @@ const BACK_TEXT = { overview: '← 总览', topology: '← 拓扑', enroll: '←
 const backText = computed(() => BACK_TEXT[props.from] || BACK_TEXT.overview)
 
 const viewport = ref(null)
-const topology = ref(defaultTopology)
+const topology = ref(null)
 const hostName = ref('')
 const drawerSpec = ref(null)
 
 let renderer = null
 
 function buildTopologyFromMetrics(host) {
-  if (!host) return defaultTopology
+  if (!host) return null
+
+  /* The demo props are fictional machines, so they are allowed fictional parts -
+     and they are the only nodes that get `sample-topology.json`, which names an
+     i9-14900K / RTX 4090 / 990 Pro board. Every one of them carries the 模拟-
+     prefix on its card and in the top bar count (S2 的诚实红线), so nothing here
+     claims to be hardware the user owns. Real nodes report their own topology
+     once the Agent is upgraded; until then they get the metrics-derived board
+     below, with empty slots where nothing is known. */
+  if (host.kind === 'demo' && !host.topology) return defaultTopology
 
   if (host.topology) {
-    const t = host.topology
+    /* Copy, never annotate in place: this object came from the Server snapshot,
+       and writing a derived `pch` into it makes the client a second, invisible
+       editor of a fact the Agent owns (S4 §1.2 - same rule the event stream
+       follows: derived things are derived at read time). */
+    const t = { ...host.topology }
     if (!t.pch) {
       const hasPchDevices = (t.storage || []).some(s => s.via === 'pch') ||
                             (t.network || []).some(n => n.via === 'pch')
-      if (hasPchDevices) {
-        t.pch = { id: 'pch0', model: 'PCH', link_to_cpu: 'DMI' }
-      }
+      if (hasPchDevices) t.pch = { id: 'pch0', model: 'PCH', link_to_cpu: 'DMI' }
     }
     return t
   }
 
   const metrics = host.metrics
-  if (!metrics) return defaultTopology
+  if (!metrics) return null
 
-  const topo = { ...defaultTopology }
+  /* No Agent topology (the three production Agents predate S2b): build only what
+     the metrics prove, and inherit **nothing** else from the sample file.
+     `sample-topology.json` describes a fictional workstation - i9-14900K, RTX
+     4090, 990 Pro 2TB, Intel I225-V, DDR5-6000 - and spreading it into a real
+     machine's motherboard view is how the panel ended up naming drives the user
+     does not own (S4 §3.3). Empty lists draw empty slots, which is the honest
+     picture: the Agent has not told us what is in them. */
+  const topo = { host_type: 'unknown', label: displayName(host), synthesised: true }
   if (metrics.cpu) {
-    topo.cpu = { ...topo.cpu, model: metrics.cpu.model || metrics.cpu.model_name || topo.cpu?.model || 'CPU', cores: metrics.cpu.cores }
+    topo.cpu = {
+      id: 'cpu0',
+      model: metrics.cpu.model || metrics.cpu.model_name || 'CPU',
+      cores: metrics.cpu.cores,
+      cores_physical: metrics.cpu.cores_physical,
+    }
   }
   if (metrics.memory) {
-    const totalGb = metrics.memory.total_gb || 16
-    const stickCount = metrics.memory.sticks?.length || Math.max(1, Math.round(totalGb / 8))
-    const stickSize = Math.round(totalGb / stickCount)
+    const totalGb = metrics.memory.total_gb ?? null
     topo.memory = {
-      channels: Math.min(stickCount, 4),
-      type: 'DDR4',
-      sticks: Array.from({ length: Math.min(stickCount, 4) }, (_, i) => ({
-        slot: `DIMM_${i + 1}`, size_gb: stickSize, freq_mhz: 2666,
-      })),
+      /* One pool, labelled with the one number that is real. psutil reports a
+         single usage figure for the whole pool, and how many sticks or channels
+         make it up is not measurable from here - the previous version invented
+         `DDR4` DIMM_1..n at 2666 MHz, sized by dividing the total by a guessed
+         stick count. The renderer draws up to two tanks and already tolerates a
+         missing per-tank capacity, so one tank named 内存池 is the honest shape
+         (S4 §3.3). */
+      channels: 1,
+      type: null,
+      total_gb: totalGb,
+      sticks: [{ slot: '内存池', size_gb: totalGb }],
     }
   }
   if (metrics.gpu?.length) {
     topo.gpu = metrics.gpu.map((g, i) => ({
       id: `gpu${i}`, slot: `PCIe_x16_${i}`,
       model: g.name || `GPU ${i}`,
-      vram_gb: g.vram_total_mb ? Math.round(g.vram_total_mb / 1024) : 4,
+      vram_gb: g.vram_total_mb ? Math.round(g.vram_total_mb / 1024) : null,
     }))
   }
+  topo.storage = []
+  topo.network = []
   return topo
 }
 
@@ -83,6 +112,7 @@ function pickToSpec(key) {
   if (key === 'memory') return { kind: 'mem' }
   if (/^gpu\d+$/.test(key)) return { kind: 'gpu', key, index: Number(key.slice(3)) }
   const t = topology.value
+  if (!t) return null
   if ((t.storage || []).some(s => s.id === key)) return { kind: 'disk' }
   if ((t.network || []).some(n => n.id === key)) return { kind: 'network' }
   return null
@@ -96,10 +126,12 @@ function onPick(key) {
 function buildScene(topoData) {
   renderer?.dispose()
   renderer = null
-  if (viewport.value) {
-    renderer = new TopologyRenderer(viewport.value, topoData)
-    renderer.enableClicks(onPick)
-  }
+  /* No topology = draw nothing rather than a bare PCB. An empty board with a CPU
+     in the middle would read as "this machine has no disks", which is a claim;
+     the overlay in the template says the true reason (S4 §1.5 禁则 3). */
+  if (!topoData || !viewport.value) return
+  renderer = new TopologyRenderer(viewport.value, topoData)
+  renderer.enableClicks(onPick)
 }
 
 /* ---------- Component-level CRIT map for the 3D blink (server-derived) ---------- */
@@ -191,10 +223,18 @@ onBeforeUnmount(() => {
           <p class="hint">它不在 Server 当前的主机列表里（可能已被退役，或 Server 重启后 Agent 尚未重连）<br>
             告警按最后已知状态保留，不会因此被判成"已恢复"</p>
         </div>
+        <!-- Order matters: an absent node has no metrics and therefore no board
+             either, but the reason to print is the absence, not the Agent
+             version (S4 §1.5 禁则 3 - an empty stage must state the real why). -->
         <div v-else-if="absent" class="offline-note">
           {{ host.absent_record
             ? `常驻节点已缺席 · 上次在场 ${formatAgo(host.last_seen)}（计入在线率，不计入健康度）`
             : `临时节点已离场 · 上次在场 ${formatSeenLast(host.last_seen)}（不报警、不计入在线率）` }}
+        </div>
+        <div v-else-if="!topology" class="error-overlay">
+          <p>这台机器还没有可画的结构</p>
+          <p class="hint">Agent 尚未上报硬件拓扑，右侧读数照常实时<br>
+            升级 Agent 后，这里会画出它真实的内存条、显卡、盘与网卡</p>
         </div>
         <div v-else-if="!host.online" class="offline-note">
           节点失联{{ host.lastSeen ? ' · 最后上报 ' + new Date(host.lastSeen).toLocaleTimeString() : '' }}
@@ -239,7 +279,7 @@ onBeforeUnmount(() => {
 /* Class is never implicit (S1 design §9): 常驻/临时 must be readable here too. */
 .tb-class {
   font-size: 10px; border-radius: 8px; padding: 0 6px; pointer-events: auto;
-  color: #1a7f37; background: rgba(30,140,50,.10);
+  color: var(--ok-ink); background: rgba(30,140,50,.10);
 }
 .tb-class.ephemeral {
   color: var(--text2); background: rgba(0,0,0,.05); border: 1px dashed var(--border);
@@ -248,9 +288,9 @@ onBeforeUnmount(() => {
   font-size: 11px; font-weight: 700; padding: 2px 10px; border-radius: 12px;
   border: 1px solid var(--border); background: var(--bg-glass); pointer-events: auto;
 }
-.tb-nodelevel.ok { color: #1a7f37; border-color: rgba(30,140,50,.4); }
-.tb-nodelevel.warn { color: #9a6700; border-color: rgba(210,153,34,.5); }
-.tb-nodelevel.crit { color: #b62324; border-color: rgba(248,81,73,.5); }
+.tb-nodelevel.ok { color: var(--ok-ink); border-color: rgba(30,140,50,.4); }
+.tb-nodelevel.warn { color: var(--warn-ink); border-color: rgba(210,153,34,.5); }
+.tb-nodelevel.crit { color: var(--crit-ink); border-color: rgba(248,81,73,.5); }
 .tb-nodelevel.offline { color: var(--text3); }
 
 .offline-note {
