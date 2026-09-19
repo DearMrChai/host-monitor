@@ -39,7 +39,11 @@ const { oncePerEpisode } = events
 const { ingest, REASON_TEXT } = await import('../src/ingest.js')
 const { store } = await import('../src/store.js')
 const { alertEngine } = await import('../src/alerts.js')
-const { evaluateCluster, thresholds } = await import('../src/status.js')
+const { evaluateCluster } = await import('../src/status.js')
+// S6 (H9): thresholds moved to the live config module, and this selftest is the
+// one place that *writes* them directly. It works because config mutates in
+// place - the same convention selftest-config B asserts on purpose.
+const { thresholds } = await import('../src/config.js')
 
 let pass = 0
 let fail = 0

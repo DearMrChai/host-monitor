@@ -2,15 +2,12 @@
  * Four-state derivation (P1): component metrics -> node status -> cluster health.
  * Contract defined in P1-细化设计.md §1.2. Evaluation is per-frame instantaneous;
  * debouncing/alert lifecycle belongs to P2 and is NOT implemented here.
+ *
+ * S6 (H9): thresholds are no longer read from a file here - they come from the
+ * live config module, and this file deliberately does **not** re-export them, so
+ * "where does a threshold value come from" has exactly one answer.
  */
-import { readFileSync } from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const thresholds = JSON.parse(
-  readFileSync(path.join(__dirname, 'config', 'thresholds.json'), 'utf8'),
-);
+import { mergeNodeThresholds } from './config.js';
 
 const RANK = { OK: 0, WARN: 1, CRIT: 2, OFFLINE: 3 };
 
@@ -32,10 +29,19 @@ function levelFor(value, th) {
 
 function pushReason(reasons, metric, source, value, th, level) {
   if (!level || level === 'OK') return;
-  reasons.push({ metric, source, value, threshold: level === 'CRIT' ? th.crit : th.warn, level });
+  const side = level === 'CRIT' ? 'crit' : 'warn';
+  const reason = { metric, source, value, threshold: th[side], level };
+  // J3: a red line this machine's owner moved must say so on the reason row.
+  // Without it the next person edits the *global* threshold, sees nothing change
+  // on this card, and concludes the tool is broken.
+  if (th.custom?.[side]) reason.custom = true;
+  reasons.push(reason);
 }
 
 export function evaluateHost(host) {
+  // One merge per frame, then every read below goes through `th` - a node whose
+  // owner tuned it is evaluated with its own numbers end to end, not per branch.
+  const th = mergeNodeThresholds(host.thresholds_override);
   const components = {
     cpu: { level: null, usage: null, temperature: null },
     mem: { level: null, percent: null },
@@ -64,7 +70,7 @@ export function evaluateHost(host) {
       components,
       reasons: absent ? [] : [{
         metric: 'offline', source: 'heartbeat', value: offlineSec,
-        threshold: thresholds.offline_seconds, level: 'OFFLINE',
+        threshold: th.offline_seconds, level: 'OFFLINE',
       }],
     };
   }
@@ -73,56 +79,56 @@ export function evaluateHost(host) {
   if (m) {
     // CPU: usage + temperature, worst of the two
     if (m.cpu) {
-      const lu = levelFor(m.cpu.usage_percent, thresholds.cpu_usage);
-      const lt = levelFor(m.cpu.temperature_c, thresholds.cpu_temp);
+      const lu = levelFor(m.cpu.usage_percent, th.cpu_usage);
+      const lt = levelFor(m.cpu.temperature_c, th.cpu_temp);
       components.cpu = {
         level: worstLevel(lu, lt),
         usage: m.cpu.usage_percent ?? null,
         temperature: m.cpu.temperature_c ?? null,
       };
-      pushReason(reasons, 'cpu_usage', 'cpu', m.cpu.usage_percent, thresholds.cpu_usage, lu);
-      pushReason(reasons, 'cpu_temp', 'cpu', m.cpu.temperature_c, thresholds.cpu_temp, lt);
+      pushReason(reasons, 'cpu_usage', 'cpu', m.cpu.usage_percent, th.cpu_usage, lu);
+      pushReason(reasons, 'cpu_temp', 'cpu', m.cpu.temperature_c, th.cpu_temp, lt);
     }
 
     // Memory (pooled percent only, per design §1.3)
     if (m.memory) {
-      const l = levelFor(m.memory.percent, thresholds.mem);
+      const l = levelFor(m.memory.percent, th.mem);
       components.mem = { level: l, percent: m.memory.percent ?? null };
-      pushReason(reasons, 'mem', 'mem', m.memory.percent, thresholds.mem, l);
+      pushReason(reasons, 'mem', 'mem', m.memory.percent, th.mem, l);
     }
 
     // Disk: worst fixed partition
     if (m.disk?.partitions?.length) {
       const worst = m.disk.partitions.reduce((a, b) =>
         (b.percent > a.percent ? b : a));
-      const l = levelFor(worst.percent, thresholds.disk);
+      const l = levelFor(worst.percent, th.disk);
       components.disk = { level: l, worst_percent: worst.percent, worst_mount: worst.mountpoint };
-      pushReason(reasons, 'disk', worst.mountpoint, worst.percent, thresholds.disk, l);
+      pushReason(reasons, 'disk', worst.mountpoint, worst.percent, th.disk, l);
     }
 
     // GPU: per-card temperature (thresholds per design §2.2 are temp-only)
     for (const g of m.gpu || []) {
-      const l = levelFor(g.temperature_c, thresholds.gpu_temp);
+      const l = levelFor(g.temperature_c, th.gpu_temp);
       components.gpu.push({
         id: `gpu${g.index ?? 0}`, level: l,
         usage: g.usage_percent ?? null, temperature: g.temperature_c ?? null,
       });
-      pushReason(reasons, 'gpu_temp', `gpu${g.index ?? 0}`, g.temperature_c, thresholds.gpu_temp, l);
+      pushReason(reasons, 'gpu_temp', `gpu${g.index ?? 0}`, g.temperature_c, th.gpu_temp, l);
     }
 
     // Link: star probe results (P3). Indeterminate targets are absent from
     // the frame entirely, so a restricted network never false-alarms.
     const linkTargets = [];
     for (const p of m.probes?.results || []) {
-      const lr = levelFor(p.rtt_ms, thresholds.rtt_ms);
-      const ll = levelFor(p.loss_pct, thresholds.packet_loss);
+      const lr = levelFor(p.rtt_ms, th.rtt_ms);
+      const ll = levelFor(p.loss_pct, th.packet_loss);
       const l = worstLevel(lr, ll);
       linkTargets.push({
         target: p.target, name: p.name, kind: p.kind,
         rtt_ms: p.rtt_ms ?? null, loss_pct: p.loss_pct ?? null, level: l,
       });
-      pushReason(reasons, 'rtt_ms', p.target, p.rtt_ms, thresholds.rtt_ms, lr);
-      pushReason(reasons, 'packet_loss', p.target, p.loss_pct, thresholds.packet_loss, ll);
+      pushReason(reasons, 'rtt_ms', p.target, p.rtt_ms, th.rtt_ms, lr);
+      pushReason(reasons, 'packet_loss', p.target, p.loss_pct, th.packet_loss, ll);
     }
     components.link = {
       level: linkTargets.length

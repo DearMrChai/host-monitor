@@ -154,6 +154,15 @@ class Roster {
         last_seen    INTEGER NOT NULL,
         last_latency INTEGER
       );
+      /* S6 §2: the runtime config. Separate from the meta table on purpose - meta
+         rows are scattered facts the code already branches on, while this table
+         has exactly one reader (config.js) and is the *truth* for thresholds and
+         probe plans after first boot. */
+      CREATE TABLE IF NOT EXISTS settings (
+        key        TEXT PRIMARY KEY,
+        value      TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
     `)
 
     this.insert = this.db.prepare(`
@@ -494,6 +503,54 @@ class Roster {
   }
 
   /**
+   * S6 §5: the档案 half of the settings screen. `kind` is deliberately NOT
+   * settable here - demo/observed are server-side classifications, and a node (or
+   * a page) that could call itself "demo" could opt out of the denominator and
+   * the health roll-up (S2 §5 in reverse). `presence_class` has its own endpoint
+   * because changing it has alert-side consequences this form should not imply.
+   */
+  setProfile(hostId, patch = {}) {
+    const node = this.cache.get(hostId)
+    if (!node) return { ok: false, error: 'no such node' }
+    const next = { ...node }
+    const changed = []
+    if (patch.display_name !== undefined) {
+      const clean = String(patch.display_name).trim().slice(0, 40)
+      if (!clean) return { ok: false, error: '显示名不能为空' }
+      if (clean !== node.display_name) { next.display_name = clean; changed.push('display_name') }
+    }
+    if (patch.owner !== undefined) {
+      const clean = String(patch.owner).trim().slice(0, 20)
+      if (!clean) return { ok: false, error: '归属不能为空' }
+      if (clean !== node.owner) { next.owner = clean; changed.push('owner') }
+    }
+    if (patch.role !== undefined) {
+      const clean = String(patch.role).trim().slice(0, 20)
+      if (clean && !/^[a-z0-9_-]+$/.test(clean)) {
+        return { ok: false, error: '角色只能用小写字母/数字/-/_' }
+      }
+      if (clean !== node.role) { next.role = clean || 'other'; changed.push('role') }
+    }
+    if (patch.site !== undefined) {
+      const clean = String(patch.site).trim().slice(0, 20)
+      // The site doubles as a key into probes.sites, so a shaped string is a
+      // correctness requirement, not cosmetics: '__proto__' would otherwise make
+      // probePlanFor() find a plan that nobody wrote. config.js reads that map
+      // through own-property lookups now, but a name that can only ever be a
+      // JS internals key has no business being a site label either.
+      if (!clean || !/^[a-z0-9_-]+$/.test(clean) || ['__proto__', 'constructor', 'prototype'].includes(clean)) {
+        return { ok: false, error: '站点名需为小写字母/数字/-/_（它同时是探测计划表的键）' }
+      }
+      if (clean !== node.site) { next.site = clean; changed.push('site') }
+    }
+    if (!changed.length) return { ok: true, node, changed: [] }
+    const saved = this.save(next)
+    recordEvent({ kind: 'roster', code: 'profile', hostId, level: 'info',
+      detail: { keys: changed } })
+    return { ok: true, node: saved, changed }
+  }
+
+  /**
    * Mute (S1 §3.3): suppresses this node's alerts in banner/list/sound only.
    * OFFLINE is exempt (availability is a fact worth waking up for) - enforced
    * in alerts.js, not here. `until: null` cancels.
@@ -577,6 +634,62 @@ class Roster {
   demoEnabledStored() {
     const v = this.#metaGet('demo_enabled')
     return v === null ? null : v === '1'
+  }
+
+  // ---------- runtime settings (S6 §2: the DB is the truth after first boot) ----------
+
+  /** Injected into config.attach(). Returns null (not '') when there is no row,
+   *  because "no row" is what decides whether the seed file gets read. */
+  getSetting(key) {
+    return this.db.prepare('SELECT value FROM settings WHERE key = ?').get(key)?.value ?? null
+  }
+
+  setSetting(key, value) {
+    this.db.prepare(`
+      INSERT INTO settings (key, value, updated_at) VALUES (?,?,?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
+      .run(key, value, Date.now())
+  }
+
+  /** One row of audit for a config change: who/what/when is the event stream's
+   *  job, and "the thresholds were edited at 03:12" is the only thing that makes
+   *  a later surprise alert explainable. Values are NOT stored here (S5 G3: the
+   *  event stream is readable without a passphrase) - the current value is
+   *  already in /api/config. */
+  setNodeSettings(hostId, patch, { code = 'node_settings', detail = {} } = {}) {
+    const node = this.cache.get(hostId)
+    if (!node) return { ok: false, error: 'no such node' }
+    const s = parseSettings(node)
+    const changed = []
+    for (const [key, value] of Object.entries(patch)) {
+      if (value === null) {
+        if (s[key] !== undefined) delete s[key]
+        changed.push(key)
+      } else if (JSON.stringify(s[key]) !== JSON.stringify(value)) {
+        s[key] = value
+        changed.push(key)
+      }
+    }
+    if (!changed.length) return { ok: true, node, changed: [] }
+    const saved = this.save({ ...node, settings_json: JSON.stringify(s) })
+    // `changed` here is which *settings keys* moved (`thresholds`), which is a
+    // different thing from the caller's `keys` (which *thresholds* within them,
+    // e.g. `cpu_usage`) - and that is the one the line has to name, so the
+    // caller's detail wins instead of being overwritten into "改用自定义阈值：thresholds".
+    recordEvent({ kind: 'roster', code, hostId, level: 'info',
+      detail: { keys: changed, ...detail } })
+    return { ok: true, node: saved, changed }
+  }
+
+  /** What evaluateHost needs, without handing out the whole settings bag. */
+  nodeThresholds(hostId) {
+    const node = this.cache.get(hostId)
+    return node ? parseSettings(node).thresholds || null : null
+  }
+
+  nodeProbes(hostId) {
+    const node = this.cache.get(hostId)
+    return node ? parseSettings(node).probes || null : null
   }
 
   // ---------- presence ledger (S5 §4) ----------

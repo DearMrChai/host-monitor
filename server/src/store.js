@@ -2,14 +2,23 @@
  * In-memory data store for host monitoring.
  * Tracks connected hosts, their topology, latest metrics, and online status.
  */
-import { evaluateHost, evaluateCluster, thresholds } from './status.js';
+import { evaluateHost, evaluateCluster } from './status.js';
+import { thresholds, probePlanFor } from './config.js';
 import { alertEngine } from './alerts.js';
 import { roster } from './roster.js';
 import { ingest } from './ingest.js';
 import { demoFleet } from './demo.js';
 import { record as recordEvent, oncePerEpisode } from './events.js';
 
-const OFFLINE_TIMEOUT_MS = 15_000;
+const OFFLINE_TIMEOUT_DEFAULT_S = 15;
+
+/** How long silence makes a node OFFLINE (P1 §2.1). Read live, not frozen: the
+ *  same number appears in the alert reason row via thresholds.offline_seconds,
+ *  so a boot-time constant here would let the settings UI move the label while
+ *  the flip stayed put - a knob that lies about what it changes. */
+function offlineTimeoutMs() {
+  return (Number(thresholds.offline_seconds) || OFFLINE_TIMEOUT_DEFAULT_S) * 1000;
+}
 
 /** Presence policy (S3 §4.1). `confirmed` + this grace window are what keep the
  *  roster-derived absence cards from becoming the new ghost nodes: nothing is
@@ -25,6 +34,20 @@ function presenceCfg() {
     // asks "how long do I keep shouting about a machine I watched go quiet".
     degradeAfterMs: (Number(p.degrade_after_minutes) || 15) * 60_000,
   };
+}
+
+/**
+ * H6 / J5: which probe plan a node runs, and whether it was inherited. ONE
+ * function on purpose - the register ack and the card badge must be derived
+ * identically, or the board can print "继承全局探测计划" beside a machine that
+ * was in fact handed its own. The plan itself only ever leaves through the ack
+ * (it carries real addresses); the snapshot keeps source/suspect.
+ */
+export function nodeProbePlan(hostId) {
+  return probePlanFor({
+    site: roster.get(hostId)?.site,
+    override: roster.nodeProbes(hostId),
+  });
 }
 
 class MonitorStore {
@@ -89,9 +112,10 @@ class MonitorStore {
 
   checkTimeouts(now = Date.now()) {
     const { degradeAfterMs } = presenceCfg();
+    const offlineMs = offlineTimeoutMs();
     for (const [, host] of this.hosts) {
       const silent = now - host.lastSeen;
-      if (host.online && silent > OFFLINE_TIMEOUT_MS) host.online = false;
+      if (host.online && silent > offlineMs) host.online = false;
       /* H18: a machine that went quiet *while this process was running* used to
          stay a live OFFLINE record forever, because `hosts` is never pruned - so
          shutting a box down overnight meant a CRIT card, a looping sound and a
@@ -157,12 +181,20 @@ class MonitorStore {
         // The ABSENT card says "last present HH:MM"; that must be the roster's
         // persisted value, not host.lastSeen (which resets on a Server restart).
         host.last_seen = node.last_seen;
+        // S6 §3 (H7): carried in on the host so status.js never has to import
+        // the roster - that import would close a cycle (status -> roster ->
+        // events -> status) and it would put a second truth in evaluateHost.
+        host.thresholds_override = roster.nodeThresholds(host.host_id);
       } else {
         host.presence_class = 'persistent';
         host.display_name = host.hostname;
         host.confirmed = false;
+        host.thresholds_override = null;
       }
       host.muted_until = roster.mutedUntil(host.host_id);
+      const pp = nodeProbePlan(host.host_id);
+      host.probe_plan_source = pp.source;
+      host.probe_plan_suspect = pp.suspect;
       host.status = evaluateHost(host);
     }
     this.#presenceEvents(hosts);

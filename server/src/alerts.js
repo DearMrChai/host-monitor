@@ -9,26 +9,29 @@
  *  - escalation is immediate; de-escalation/recovery uses the same window
  *  - an alert only "recovers" when its host is reporting and the reason is
  *    gone: reclassifying/retiring closes it as `cancelled`, a host the Server
- *    has no data for holds it (see UNKNOWN_GRACE_MS) - never a fake 已恢复
+ *    has no data for holds it (see unknownGraceMs()) - never a fake 已恢复
  *  - resolved alerts are kept `resolved_keep_minutes`, capped at history_capacity
  *  - host.status.level becomes the DEBOUNCED level; instant level moves to
  *    host.status.instant_level; in-window suspects appear in host.status.pending
  */
-import { thresholds } from './status.js'
+import { thresholds } from './config.js'
 import { history } from './history.js'
 import { roster } from './roster.js'
 
-const cfg = thresholds.alert || {}
-const DEBOUNCE_CYCLES = cfg.debounce_cycles ?? 3
-const KEEP_MS = (cfg.resolved_keep_minutes ?? 5) * 60_000
-const HISTORY_CAPACITY = cfg.history_capacity ?? 200
-const TICK_MS = cfg.tick_ms ?? 2000
+// Read per tick, never frozen at import (S6 §2.1 / J1): a `const` here would be a
+// second runtime truth that the settings screen cannot reach, which is the exact
+// shape of H9. Missing keys keep the documented defaults.
+const alertCfg = () => thresholds.alert || {}
+const debounceCycles = () => alertCfg().debounce_cycles ?? 3
+const keepMs = () => (alertCfg().resolved_keep_minutes ?? 5) * 60_000
+const historyCapacity = () => alertCfg().history_capacity ?? 200
+const tickMs = () => alertCfg().tick_ms ?? 2000
 // How long an alert may stay "frozen because its host is unknown to this
 // Server process" before it closes as stale instead of pinning the banner.
 // Agents reconnect within seconds after a restart, so this only has to cover
 // the reconnect window - keep it short, because a frozen CRIT keeps the client
 // crit loop running and a powered-off machine must not howl for half an hour.
-const UNKNOWN_GRACE_MS = (cfg.unknown_alert_grace_minutes ?? 5) * 60_000
+const unknownGraceMs = () => (alertCfg().unknown_alert_grace_minutes ?? 5) * 60_000
 
 const RANK = { OK: 0, WARN: 1, CRIT: 2, OFFLINE: 3 }
 
@@ -40,15 +43,15 @@ class AlertEngine {
   }
 
   /**
-   * Advance windows at most once per TICK_MS (idempotent for REST polls),
+   * Advance windows at most once per tickMs() (idempotent for REST polls),
    * then annotate every host.status with debounced fields.
    */
   tick(hosts) {
     const now = Date.now()
     // Recomputed on EVERY call, not only on gated ticks: a mute the user just
-    // set must show up in the next snapshot (<1ms), not up to TICK_MS later.
+    // set must show up in the next snapshot (<1ms), not up to tickMs() later.
     this.muted = this.muteSet(hosts, now)
-    if (now - this.lastTickAt >= TICK_MS) {
+    if (now - this.lastTickAt >= tickMs()) {
       this.lastTickAt = now
       this.advance(hosts, now)
     }
@@ -89,17 +92,28 @@ class AlertEngine {
             metric: r.metric, source: r.source, level: r.level,
             state: 'pending', overCycles: 1, underCycles: 0,
             value_at_trigger: r.value, latest_value: r.value, threshold: r.threshold,
+            custom: r.custom,
             started_at: null, resolved_at: null,
           }
           this.entries.set(key, e)
           if (r.metric === 'offline') this.activate(e, r, now)
         } else if (e.state === 'pending') {
           e.overCycles += 1
+          // `threshold`/`custom` travel with `latest_value`: both describe the
+          // comparison happening *now*, and an owner can move their own red line
+          // while an alert is still in its window (S6 J3).
           e.latest_value = r.value
+          e.threshold = r.threshold
+          e.custom = r.custom
           if (RANK[r.level] > RANK[e.level]) e.level = r.level
-          if (e.metric === 'offline' || e.overCycles >= DEBOUNCE_CYCLES) this.activate(e, r, now)
+          if (e.metric === 'offline' || e.overCycles >= debounceCycles()) this.activate(e, r, now)
         } else { // active
           e.latest_value = r.value
+          // A node whose owner raised the crit line mid-alert must not keep
+          // showing the line it crossed an hour ago, and the "该机自定义" tag
+          // has to survive the debouncer or it never reaches the card (J3).
+          e.threshold = r.threshold
+          e.custom = r.custom
           e.underCycles = 0
           e._unknownSince = null // reporting again: the no-news clock restarts
           const escalated = RANK[r.level] > RANK[e.level]
@@ -142,7 +156,7 @@ class AlertEngine {
              so the entry holds. Bounded: a node that never returns must not pin
              an alert forever, so after the grace it closes as 已失效, never 已恢复. */
           e._unknownSince ??= now
-          if (now - e._unknownSince >= UNKNOWN_GRACE_MS) {
+          if (now - e._unknownSince >= unknownGraceMs()) {
             e.state = 'resolved'
             e.cancelled = 'stale'
             e.resolved_at = now
@@ -151,22 +165,22 @@ class AlertEngine {
         } else {
           e._unknownSince = null
           e.underCycles += 1
-          if (e.underCycles >= DEBOUNCE_CYCLES) {
+          if (e.underCycles >= debounceCycles()) {
             e.state = 'resolved'
             e.resolved_at = Date.now()
             persist(e)
           }
         }
-      } else if (Date.now() - e.resolved_at > KEEP_MS) {
+      } else if (Date.now() - e.resolved_at > keepMs()) {
         this.entries.delete(key)
       }
     }
 
     // Trim history to capacity (oldest resolved first)
     const resolved = [...this.entries.values()].filter((e) => e.state === 'resolved')
-    if (resolved.length > HISTORY_CAPACITY) {
+    if (resolved.length > historyCapacity()) {
       resolved.sort((a, b) => a.resolved_at - b.resolved_at)
-      for (const e of resolved.slice(0, resolved.length - HISTORY_CAPACITY)) {
+      for (const e of resolved.slice(0, resolved.length - historyCapacity())) {
         this.entries.delete(e.id)
       }
     }
@@ -177,6 +191,7 @@ class AlertEngine {
     e.started_at = now
     e.value_at_trigger = r.value
     e.threshold = r.threshold
+    e.custom = r.custom
     e.underCycles = 0
     persist(e)
   }
@@ -189,8 +204,8 @@ class AlertEngine {
       this.entries.set(r.id, {
         id: r.id, host_id: r.host_id, hostname: r.hostname,
         metric: r.metric, source: r.source, level: r.level,
-        state: 'active', overCycles: DEBOUNCE_CYCLES,
-        underCycles: DEBOUNCE_CYCLES - 1, // self-heals within 2 clean ticks
+        state: 'active', overCycles: debounceCycles(),
+        underCycles: debounceCycles() - 1, // self-heals within 2 clean ticks
         value_at_trigger: r.value_at_trigger, latest_value: r.latest_value,
         threshold: r.threshold, started_at: r.started_at, resolved_at: null,
       })
@@ -229,10 +244,12 @@ class AlertEngine {
       s.reasons = active.map((e) => ({
         metric: e.metric, source: e.source, value: e.latest_value,
         threshold: e.threshold, level: e.level,
+        ...(e.custom ? { custom: true } : {}),
       }))
       s.pending = pending.map((e) => ({
         metric: e.metric, source: e.source, value: e.latest_value,
-        level: e.level, cycles: e.overCycles, needed: DEBOUNCE_CYCLES,
+        level: e.level, cycles: e.overCycles, needed: debounceCycles(),
+        ...(e.custom ? { custom: true } : {}),
       }))
     }
   }

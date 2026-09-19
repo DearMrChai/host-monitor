@@ -10,12 +10,12 @@
  */
 import express from 'express';
 import cors from 'cors';
-import { readFileSync, existsSync } from 'fs';
+import { existsSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
-import { store } from './store.js';
+import { store, nodeProbePlan } from './store.js';
 import { evaluateCluster } from './status.js';
 import { history } from './history.js';
 import { alertEngine } from './alerts.js';
@@ -23,6 +23,7 @@ import { roster, CLASSES } from './roster.js';
 import { ingest, REASON_TEXT } from './ingest.js';
 import { demoFleet } from './demo.js';
 import { ztPresence } from './zerotier.js';
+import * as config from './config.js';
 import * as events from './events.js';
 
 // Overridable so the self-test can run a throwaway Server beside a live one.
@@ -30,16 +31,13 @@ const AGENT_PORT = Number(process.env.HM_AGENT_PORT) || 9100;
 const CLIENT_PORT = Number(process.env.HM_CLIENT_PORT) || 9101;
 const BROADCAST_INTERVAL_MS = 2000;
 
-// Star-probe plan pushed to every Agent in the register ack (P3).
-// Real targets live in probes.json (gitignored); copy probes.example.json
-// to start. Missing file -> Agents fall back to Server-only probing.
-let probePlan = null;
-try {
-  probePlan = JSON.parse(
-    readFileSync(new URL('./config/probes.json', import.meta.url), 'utf8'));
-} catch {
-  console.log('[Server] No probes.json, agents will probe the Server arm only');
-}
+// S6 §2 (H9): the DB is the runtime truth; config/thresholds.json and
+// config/probes.json are read only to seed an empty settings table. This call
+// must come before anything evaluates a frame.
+config.attach({
+  get: (key) => roster.getSetting(key),
+  set: (key, value) => roster.setSetting(key, value),
+});
 
 // P5: replay persisted active alerts so a restart doesn't lose them (design §7).
 alertEngine.restoreActive(history.activeAlertRows());
@@ -116,8 +114,13 @@ agentWss.on('connection', (ws, req) => {
             `${t.memory?.sticks?.length || 0} DIMM, ` +
             `${t.gpu?.length || 0} GPU`);
         }
+        // S6 §4 (H6): the plan is derived per node, and the *source* travels with
+        // it. The Agent does not interpret the source - it prints it, so the line
+        // in its log says which gateway it was told to ping and why.
+        const pp = nodeProbePlan(hostId);
         ws.send(JSON.stringify({
-          type: 'registered', host_id: hostId, probe_plan: probePlan,
+          type: 'registered', host_id: hostId, probe_plan: pp.plan,
+          probe_plan_source: pp.source,
           node_key: v.node_key || undefined,
         }));
       } else if (msg.type === 'metrics') {
@@ -312,6 +315,111 @@ app.post('/api/roster/:hostId/name', requireAdmin, (req, res) => {
   const r = roster.setDisplay(req.params.hostId, (req.body || {}).name);
   if (!r.ok) return res.status(400).json({ error: r.error });
   res.json({ ok: true, node: roster.publicOf(req.params.hostId) });
+});
+
+// ============================================================
+// S6: settings (design §5). The board's reads are open by decision, so
+// everything on the read side is the *masked* view (S5 G3), and every write here
+// takes the single `requireAdmin` gate - the hygiene self-test enumerates the
+// routes, so a new endpoint without a gate is red, not forgotten (J6).
+// ============================================================
+
+function changedKeys(before, after) {
+  const keys = new Set([...Object.keys(before || {}), ...Object.keys(after || {})]);
+  return [...keys].filter((k) => JSON.stringify(before?.[k]) !== JSON.stringify(after?.[k]));
+}
+
+/** One line in the event stream per config write. Values are not recorded: the
+ *  stream is readable without a passphrase, and the current value is already at
+ *  /api/config - the audit question is "when did somebody touch this", not "what
+ *  did they type". */
+function noteConfigWrite(code, hostId, detail) {
+  events.record({ kind: 'roster', code, hostId: hostId || null, level: 'info', detail });
+}
+
+app.get('/api/config', (req, res) => {
+  const s = config.publicSnapshot();
+  s.nodes = roster.active().map((n) => ({
+    host_id: n.host_id,
+    display_name: n.display_name,
+    owner: n.owner,
+    site: n.site,
+    role: n.role,
+    presence_class: n.presence_class,
+    thresholds: roster.nodeThresholds(n.host_id),
+    probes: roster.nodeProbes(n.host_id) ? config.maskProbePlan(roster.nodeProbes(n.host_id)) : null,
+    muted_until: roster.mutedUntil(n.host_id),
+  }));
+  res.json(s);
+});
+
+app.post('/api/admin/config/thresholds', requireAdmin, (req, res) => {
+  const body = req.body || {};
+  const before = { ...config.thresholds };
+  const r = body.reset === true
+    ? config.resetThresholdsToSeed()
+    : config.setThresholds(body.thresholds ?? body);
+  if (!r.ok) return res.status(400).json({ error: '阈值不符合约束', errors: r.errors });
+  const keys = changedKeys(before, config.thresholds);
+  if (keys.length) noteConfigWrite('thresholds_global', null, { keys, reset: !!body.reset });
+  res.json({ ok: true, changed: keys, config: config.publicSnapshot() });
+});
+
+app.post('/api/admin/config/probes', requireAdmin, (req, res) => {
+  const body = req.body || {};
+  const r = config.setProbes(body.probes ?? body);
+  if (!r.ok) return res.status(400).json({ error: '探测计划不符合约束', errors: r.errors });
+  noteConfigWrite('probes_global', null, {});
+  // Honest timing (design §4): an Agent picks up a new plan when it registers,
+  // so the change is live on next reconnect - not "instantly".
+  res.json({ ok: true, applies_on: 'agent_reconnect', config: config.publicSnapshot() });
+});
+
+app.post('/api/roster/:hostId/settings', requireAdmin, (req, res) => {
+  const { hostId } = req.params;
+  const r = roster.setProfile(hostId, req.body || {});
+  if (!r.ok) return res.status(r.error === 'no such node' ? 404 : 400).json({ error: r.error });
+  res.json({ ok: true, changed: r.changed, node: roster.publicOf(hostId) });
+});
+
+app.post('/api/roster/:hostId/thresholds', requireAdmin, (req, res) => {
+  const { hostId } = req.params;
+  const patch = (req.body || {}).thresholds;
+  if (!roster.get(hostId)) return res.status(404).json({ error: 'no such node' });
+  if (patch === null) {
+    const r = roster.setNodeSettings(hostId, { thresholds: null },
+      { code: 'node_thresholds', detail: { cleared: true } });
+    if (!r.ok) return res.status(404).json({ error: r.error });
+    return res.json({ ok: true, cleared: true, config: config.publicSnapshot() });
+  }
+  const v = config.validateNodeOverrides(patch);
+  if (!v.ok) return res.status(400).json({ error: '该机阈值不符合约束', errors: v.errors });
+  // An empty override map means "inherit everything", which is the same state as
+  // no key at all - storing {} would leave a node that looks customized forever.
+  const keys = Object.keys(v.overrides);
+  const r = roster.setNodeSettings(hostId,
+    { thresholds: keys.length ? v.overrides : null },
+    { code: 'node_thresholds', detail: { keys } });
+  if (!r.ok) return res.status(404).json({ error: r.error });
+  res.json({ ok: true, custom: keys, config: config.publicSnapshot() });
+});
+
+app.post('/api/roster/:hostId/probes', requireAdmin, (req, res) => {
+  const { hostId } = req.params;
+  const plan = (req.body || {}).probes;
+  if (!roster.get(hostId)) return res.status(404).json({ error: 'no such node' });
+  if (plan === null) {
+    const r = roster.setNodeSettings(hostId, { probes: null },
+      { code: 'node_probes', detail: { cleared: true } });
+    if (!r.ok) return res.status(404).json({ error: r.error });
+    return res.json({ ok: true, cleared: true, applies_on: 'agent_reconnect' });
+  }
+  const errs = config.validateProbes(plan);
+  if (errs.length) return res.status(400).json({ error: '该机探测计划不符合约束', errors: errs });
+  const r = roster.setNodeSettings(hostId, { probes: plan },
+    { code: 'node_probes', detail: {} });
+  if (!r.ok) return res.status(404).json({ error: r.error });
+  res.json({ ok: true, applies_on: 'agent_reconnect' });
 });
 
 // ============================================================

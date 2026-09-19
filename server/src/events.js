@@ -30,7 +30,7 @@
  * means record() is a no-op and read() returns nothing - which is exactly the
  * `history.enabled: false` dev mode, not a failure.
  */
-import { thresholds } from './status.js'
+import { thresholds } from './config.js'
 
 const WINDOWS = { '2h': 7_200_000, '24h': 86_400_000, '7d': 604_800_000 }
 const DEFAULT_LIMIT = 120
@@ -40,7 +40,9 @@ const MAX_LIMIT = 400
 // broken enrolment, not three hundred lines (S3 §3.2). Local-tunable because the
 // right value depends on how noisy a fleet is - a 3-node home bench and a 30-node
 // one do not want the same window (S5, alongside H18's thresholds).
-const MERGE_MS = Math.min(Math.max(
+// Clamped here as well as on the write side: this value widens a dedupe window,
+// and a runaway one would silently swallow distinct events.
+const mergeWindowMs = () => Math.min(Math.max(
   (Number(thresholds.events?.merge_seconds) || 60) * 1000, 5_000), 3_600_000)
 // Absence is announced once per episode; a node that stays away for a day gets
 // one line, not a daily reminder.
@@ -96,7 +98,7 @@ export function attach(history, bind = {}) {
   history.db.exec(SCHEMA)
   handle = { db: history.db, days: Number(history.cfg?.event_retention_days) || 7 }
   history.onCleanup(purge)
-  console.log(`[Events] durable stream attached (kept ${handle.days}d, merged within ${MERGE_MS / 1000}s)`)
+  console.log(`[Events] durable stream attached (kept ${handle.days}d, merged within ${mergeWindowMs() / 1000}s)`)
   return true
 }
 
@@ -123,7 +125,7 @@ function parseDetail(row) {
  * once-per-episode rule (or when nothing is attached).
  */
 export function record({ kind, code, hostId = null, level = 'info', detail = null,
-  ts = Date.now(), mergeMs = MERGE_MS, onceMs = null }) {
+  ts = Date.now(), mergeMs = mergeWindowMs(), onceMs = null }) {
   if (!handle) return null
   if (!kind || !code) return null
   const db = handle.db
@@ -136,7 +138,14 @@ export function record({ kind, code, hostId = null, level = 'info', detail = nul
   const win = onceMs ?? mergeMs
   if (last && win && ts - last.ts <= win) {
     if (onceMs) return null // stay quiet: same episode, already announced
-    db.prepare('UPDATE events SET count = count + 1, ts = ? WHERE id = ?').run(ts, last.id)
+    // The newest detail travels with the newest `ts`: a merged row renders one
+    // line, and rendering the *first* event's detail would let a later change
+    // inside the window be described by an earlier one. For `node_thresholds`
+    // that is a lie with the right shape - set an override and clear it within
+    // 60s and the stream says "改用自定义阈值" about a node that is back on
+    // global values (selftest F2).
+    db.prepare('UPDATE events SET count = count + 1, ts = ?, detail_json = ? WHERE id = ?')
+      .run(ts, JSON.stringify(detail || {}), last.id)
     return { id: last.id, merged: true }
   }
   const r = db.prepare(`
@@ -229,6 +238,14 @@ function render(row, detail) {
     case 'renamed': return `显示名改为「${detail.to}」${detail.from && detail.from !== detail.to ? `（原「${detail.from}」）` : ''}`
     case 'muted': return `${who} 告警静默至 ${detail.until_text || '今天结束'}`
     case 'unmuted': return `${who} 取消静默`
+    // S6 §5: config writes are rare and consequential, so each one is a line.
+    // Values are deliberately absent (the stream is readable without a
+    // passphrase); the current value is one GET away at /api/config.
+    case 'profile': return `${who} 档案更新：${(detail.keys || []).join('、') || '内容'}`
+    case 'node_thresholds': return `${who} ${detail.cleared ? '取消自定义阈值（回落全局）' : `改用自定义阈值：${(detail.keys || []).join('、') || '未列出项'}`}`
+    case 'node_probes': return `${who} ${detail.cleared ? '取消专属探测计划' : '设置专属探测计划（下次重连生效）'}`
+    case 'thresholds_global': return `${detail.reset ? '全局阈值回落为出厂值' : `全局阈值已更新：${(detail.keys || []).join('、') || '未列出项'}`}`
+    case 'probes_global': return '全局探测计划已更新（各 Agent 下次重连取用）'
     case 'code_issued': return `签发配对码 …${detail.tail || '?'}（${detail.ttl_minutes} 分钟 / ${detail.max_uses ? `${detail.max_uses} 次` : '不限次'}）`
     case 'code_revoked': return `撤销配对码 …${detail.tail || '?'}`
     case 'passphrase_changed': return `管理口令已${detail.was_set ? '更换' : '设置'}`

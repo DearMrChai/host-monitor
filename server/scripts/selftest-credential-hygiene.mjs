@@ -181,6 +181,12 @@ const { app, _adminFails } = await import('../src/index.js')
     '/api/admin/demo', '/api/admin/enroll', '/api/admin/enroll/revoke',
     '/api/admin/passphrase', '/api/presence/alias',
     '/api/roster/:hostId/class', '/api/roster/:hostId/mute', '/api/roster/:hostId/name',
+    // S6 §5: the settings screen's five writes. They are listed here because
+    // listing them is what turns "somebody added an endpoint" into a decision
+    // rather than an accident - C1 above already proved each one is gated.
+    '/api/admin/config/thresholds', '/api/admin/config/probes',
+    '/api/roster/:hostId/settings', '/api/roster/:hostId/thresholds',
+    '/api/roster/:hostId/probes',
   ].sort()
   ok('C2 写端点集合与文档一致（新增了端点就先补断言，别让它在盲区里长大）',
     JSON.stringify(seen) === JSON.stringify(expected),
@@ -305,7 +311,10 @@ let codePlain = null
   ]
   const READS = ['/api/hosts', '/api/alerts', '/api/alerts/history?limit=50',
     '/api/events?window=24h', '/api/events?window=2h&limit=5', '/api/health',
-    '/api/roster', '/api/enroll', '/api/presence', '/api/history/hyg-box?range=2h']
+    '/api/roster', '/api/enroll', '/api/presence', '/api/history/hyg-box?range=2h',
+    // S6: the settings screen reads config without a passphrase, so its masking
+    // is covered by the same "no full IPv4" rule as everything else.
+    '/api/config']
   /* One line per endpoint, and the extra names the specific secret that leaked,
      so a failure reads as "which credential, which endpoint" rather than 60
      red rows. The scan covers the body a *client* can fetch without any
@@ -348,6 +357,20 @@ let codePlain = null
   ok('E2 zerotier.js 只 import 名册，不 import store/status/alerts/history',
     !/\bfrom ['"]\.\/(store|status|alerts|history)/.test(src('zerotier.js'))
     && /from ['"]\.\/roster\.js['"]/.test(src('zerotier.js')))
+  /* J2 (H9) decided with a grep, not with a convention: a second reader of the
+     seed files is invisible at runtime (it agrees with the DB until somebody
+     edits the DB), so the only affordable check is the static one. Matched on
+     the *call*, not the filename: the design notes name these files in prose,
+     and a scan that goes red on a comment gets ignored within a week. */
+  const files = readdirSync(path.join(SERVER, 'src')).filter((f) => f.endsWith('.js'))
+  const readsSeed = /readFileSync\([\s\S]{0,120}?(thresholds|probes)\.json/
+  const fileReaders = files.filter((f) => f !== 'config.js' && readsSeed.test(src(f)))
+  ok('E3 只有 config.js 会读 thresholds.json / probes.json（其余模块一律走运行时真源）',
+    fileReaders.length === 0, fileReaders.join(' '))
+  ok('E4 config.js 不 import 本项目任何模块（持久化靠 attach 注入），且 status.js 不再转出口阈值',
+    !/from ['"]\.\/(store|status|alerts|history|roster|ingest|demo|zerotier|events)/.test(src('config.js'))
+    && !/export const thresholds/.test(src('status.js')),
+    '引用边应为零')
 }
 
 // ---------- F. G2's cost side: the scrypt failure budget ----------
