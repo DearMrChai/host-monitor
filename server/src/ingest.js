@@ -81,11 +81,15 @@ class IngestGate {
     }
 
     const keyOk = typeof token === 'string' && token.length === KEY_LEN && roster.keyMatches(hostId, token)
+    // A 12-hex token that is not a known code is a typo or a revoked code, and
+    // saying so is not a leak: it only reaches this branch when the node itself
+    // is unknown, so the caller already has nothing to write.
+    const codeShaped = typeof token === 'string' && token.length === CODE_LEN
 
     // 1) A pairing code spends one use and buys a fresh node key. Re-pairing a
     //    known node is allowed (key lost with a wiped disk); minting a new key
     //    retires the old one, since roster.ensure overwrites enroll_token.
-    if (!keyOk && typeof token === 'string' && token.length === CODE_LEN) {
+    if (!keyOk && codeShaped) {
       const c = roster.consumeEnroll(token, hostId, now)
       if (c.ok) {
         this.counts.paired += 1
@@ -109,7 +113,9 @@ class IngestGate {
       return { ok: true, legacy: true, ...this.#drift(hostId, fingerprint, addr, now) }
     }
 
-    return this.#log(addr, hostId, roster.get(hostId) ? 'bad_key' : 'unknown_host', now, false)
+    return this.#log(addr, hostId,
+      codeShaped ? 'unknown_code' : roster.get(hostId) ? 'bad_key' : 'unknown_host',
+      now, false)
   }
 
   /**

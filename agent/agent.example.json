@@ -1,0 +1,9 @@
+{
+  "_说明": "复制为 agent.json 后按本机情况改；命令行参数与 HM_* 环境变量优先级更高（见 config.py）。",
+  "_地址": "把 server 改成你的 Server 实际地址，形如 ws://<SERVER_IP>:9100",
+  "server": "ws://192.0.2.10:9100",
+  "host_id": "my-desktop",
+  "role": "desktop",
+  "interval": 2,
+  "_凭据": "节点密钥不在这里。配对后会自动写入同目录 identity.json —— 它是这台机器的写权限，不要外发、不要提交"
+}

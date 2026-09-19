@@ -10,3 +10,7 @@ server/src/config/probes.json
 # P5 持久化：SQLite 库文件 + 本地调参配置（模板见 history.example.json）
 server/data/
 server/src/config/history.json
+# S2b Agent 本地配置与身份：identity.json 含节点密钥、agent.json 含真实 Server 地址
+agent/agent.json
+agent/identity.json
+agent/*.tmp
