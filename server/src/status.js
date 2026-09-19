@@ -147,17 +147,26 @@ function peak(nums) {
 
 /**
  * Cluster roll-up (S1 §3.1). Health and the online ratio are computed over
- * **persistent** nodes only - that is the fix for a transient or borrowed
+ * **persistent, real** nodes only - that is the fix for a transient or borrowed
  * machine pinning the banner grey. Ephemeral nodes are reported as presence,
  * and aggregate load stays physical (any machine online right now really is
  * carrying load).
+ *
+ * S2 §5 exception to "physical": demo nodes (`kind: 'demo'`, server-generated)
+ * are excluded from health, the denominator *and* the aggregate load. Average
+ * CPU across the fleet is a factual claim about hardware I own; letting props
+ * into it would make the number unexplainable, which is the whole S1 promise.
+ * They get their own `demo` bucket so the board can still show 7 machines.
  */
 export function evaluateCluster(hosts) {
-  const classOf = (h) => h.presence_class || 'persistent';
-  const persistent = hosts.filter((h) => classOf(h) === 'persistent');
-  const ephemeral = hosts.filter((h) => classOf(h) === 'ephemeral');
+  const classOf = (h) => h.presence_class || 'persistent'
+  const isDemo = (h) => h.kind === 'demo'
+  const real = hosts.filter((h) => !isDemo(h))
+  const props = hosts.filter(isDemo)
+  const persistent = real.filter((h) => classOf(h) === 'persistent')
+  const ephemeral = real.filter((h) => classOf(h) === 'ephemeral')
 
-  const online = hosts.filter((h) => h.online);
+  const realOnline = real.filter((h) => h.online);
   const gpusOf = (h) => (h.metrics?.gpu || []);
 
   /* A muted node contributes nothing to the top-line health/link count: the
@@ -173,7 +182,7 @@ export function evaluateCluster(hosts) {
   };
   const silenced = (h) => !!h.status?.muted && !!h.online;
 
-  const linkLevels = online.filter((h) => !silenced(h))
+  const linkLevels = realOnline.filter((h) => !silenced(h))
     .map((h) => h.status?.components?.link?.level)
     .filter((l) => l && l !== 'OK');
 
@@ -183,19 +192,20 @@ export function evaluateCluster(hosts) {
     health: worstLevel(...persistent.map(levelForHealth)) || 'OK',
     online: persistent.filter((h) => h.online).length,
     total: persistent.length,
-    muted_count: hosts.filter(silenced).length,
+    muted_count: real.filter(silenced).length,
     presence: { online: epOnline.length, total: ephemeral.length },
+    demo: { online: props.filter((h) => h.online).length, total: props.length },
     link: {
       worst_level: worstLevel(...linkLevels) || null,
       degraded_count: linkLevels.length,
     },
     aggregate: {
-      cpu: { avg: avg(online.map((h) => h.metrics?.cpu?.usage_percent)),
-             peak: peak(online.map((h) => h.metrics?.cpu?.usage_percent)) },
-      mem: { avg: avg(online.map((h) => h.metrics?.memory?.percent)),
-             peak: peak(online.map((h) => h.metrics?.memory?.percent)) },
-      gpu: { avg: avg(online.flatMap(gpusOf).map((g) => g.usage_percent)),
-             peak: peak(online.flatMap(gpusOf).map((g) => g.usage_percent)) },
+      cpu: { avg: avg(realOnline.map((h) => h.metrics?.cpu?.usage_percent)),
+             peak: peak(realOnline.map((h) => h.metrics?.cpu?.usage_percent)) },
+      mem: { avg: avg(realOnline.map((h) => h.metrics?.memory?.percent)),
+             peak: peak(realOnline.map((h) => h.metrics?.memory?.percent)) },
+      gpu: { avg: avg(realOnline.flatMap(gpusOf).map((g) => g.usage_percent)),
+             peak: peak(realOnline.flatMap(gpusOf).map((g) => g.usage_percent)) },
     },
   };
 }

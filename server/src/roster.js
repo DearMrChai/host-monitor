@@ -82,6 +82,15 @@ class Roster {
         settings_json  TEXT NOT NULL DEFAULT '{}'
       );
       CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS enroll_codes (
+        code        TEXT PRIMARY KEY,
+        created_at  INTEGER NOT NULL,
+        expires_at  INTEGER NOT NULL,
+        max_uses    INTEGER NOT NULL,
+        uses        INTEGER NOT NULL DEFAULT 0,
+        note        TEXT,
+        paired_ids  TEXT NOT NULL DEFAULT ''
+      );
     `)
 
     this.insert = this.db.prepare(`
@@ -158,8 +167,12 @@ class Roster {
     if (info.hostname && info.hostname !== node.hostname) patch.hostname = info.hostname
     if (info.role && info.role !== node.role) patch.role = info.role
     if (info.agent_version && info.agent_version !== node.agent_version) patch.agent_version = info.agent_version
-    if (info.token && info.token !== node.enroll_token) patch.enroll_token = info.token
+    // Only the server-minted node key lands here. The pairing code a frame may
+    // carry is a spend-once voucher (see consumeEnroll) - storing it as the
+    // node's credential would let the same code re-authorise forever.
+    if (info.node_key && info.node_key !== node.enroll_token) patch.enroll_token = info.node_key
     if (info.fingerprint && info.fingerprint !== node.fingerprint) patch.fingerprint = info.fingerprint
+    if (info.confirmed && !node.confirmed) patch.confirmed = 1
     if (Object.keys(patch).length) {
       this.save({ ...node, ...patch })
     }
@@ -177,11 +190,14 @@ class Roster {
       site: 'home',
       kind,
       presence_class: 'persistent',
-      confirmed: 0,
+      // A machine that arrived with a pairing code was added on purpose, so it
+      // starts confirmed; one that simply showed up starts unconfirmed and the
+      // dashboard asks the user to classify it (S1 §5.3).
+      confirmed: info.confirmed ? 1 : 0,
       enrolled_at: now,
       last_seen: lastSeen ?? now,
       agent_version: info.agent_version || null,
-      enroll_token: info.token || null,
+      enroll_token: info.node_key || null,
       fingerprint: info.fingerprint || null,
       settings_json: '{}',
     }
@@ -216,6 +232,84 @@ class Roster {
     this._seenWrites = this._seenWrites || new Map()
     this._seenWrites.set(hostId, now)
     this.save({ ...node, last_seen: now })
+  }
+
+  // ---------- pairing codes & node keys (S2 §2) ----------
+
+  /**
+   * Mint a pairing code: short-lived, spend-limited, shown in plaintext exactly
+   * once (by the caller that issued it). It is NOT the node's standing
+   * credential - a successful register swaps it for a per-node key, so a code
+   * that leaks into a shell history or a screenshot dies on its own schedule.
+   * `maxUses: 0` means unlimited until expiry (used for "add my whole bench").
+   */
+  issueEnroll({ ttlMin = 15, maxUses = 1, note = null } = {}, now = Date.now()) {
+    const cap = Number.isFinite(Number(maxUses)) ? Math.max(0, Math.trunc(Number(maxUses))) : 1
+    const ttl = Math.min(Math.max(Number(ttlMin) || 15, 1), 24 * 60) * 60_000
+    const code = randomBytes(6).toString('hex')
+    this.db.prepare(`
+      INSERT INTO enroll_codes (code, created_at, expires_at, max_uses, uses, note, paired_ids)
+      VALUES (?,?,?,?,0,?,?)`).run(code, now, now + ttl, cap, String(note || '').slice(0, 60), '')
+    return { code, expires_at: now + ttl, max_uses: cap }
+  }
+
+  /** Spend one use. Returns { ok, reason } - reason is UI text, never a secret.
+   *  Reason strings match ingest.REASON_TEXT so the pairing page can show them. */
+  consumeEnroll(code, hostId, now = Date.now()) {
+    if (typeof code !== 'string' || !code) return { ok: false, reason: 'no_code' }
+    const row = this.db.prepare('SELECT * FROM enroll_codes WHERE code = ?').get(code)
+    if (!row) return { ok: false, reason: 'unknown_code' }
+    if (row.expires_at <= now) return { ok: false, reason: 'code_expired' }
+    if (row.max_uses && row.uses >= row.max_uses) return { ok: false, reason: 'code_used_up' }
+    const paired = row.paired_ids ? row.paired_ids.split(',') : []
+    if (hostId && !paired.includes(hostId)) paired.push(hostId)
+    this.db.prepare('UPDATE enroll_codes SET uses = uses + 1, paired_ids = ? WHERE code = ?')
+      .run(paired.join(','), code)
+    return { ok: true, remaining: row.max_uses ? row.max_uses - row.uses - 1 : null }
+  }
+
+  /** Codes still inside their window - what the pairing page lists. */
+  activeCodes(now = Date.now()) {
+    return this.db.prepare(
+      'SELECT code, created_at, expires_at, max_uses, uses, note, paired_ids FROM enroll_codes WHERE expires_at > ? ORDER BY created_at DESC LIMIT 20',
+    ).all(now).map((r) => ({
+      code: r.code, created_at: r.created_at, expires_at: r.expires_at,
+      max_uses: r.max_uses, uses: r.uses, note: r.note,
+      remaining: r.max_uses ? Math.max(0, r.max_uses - r.uses) : null,
+      paired_ids: r.paired_ids ? r.paired_ids.split(',') : [],
+    }))
+  }
+
+  revokeEnroll(code) {
+    const r = this.db.prepare('DELETE FROM enroll_codes WHERE code = ?').run(code)
+    return { ok: r.changes > 0, error: r.changes ? null : 'no such code' }
+  }
+
+  newNodeKey() { return randomBytes(16).toString('hex') }
+  nodeKeyOf(hostId) { return this.cache.get(hostId)?.enroll_token || null }
+
+  /** Standing per-node credential check (timing-safe; null key never matches). */
+  keyMatches(hostId, key) {
+    const want = this.nodeKeyOf(hostId)
+    if (!want || typeof key !== 'string' || !key) return false
+    const a = Buffer.from(want), b = Buffer.from(key)
+    return a.length === b.length && timingSafeEqual(a, b)
+  }
+
+  /** Roster nodes without a key: the v1 Agents still reporting tokenlessly. */
+  keylessAgents() {
+    return [...this.cache.values()]
+      .filter((n) => n.presence_class !== 'retired' && n.kind === 'agent' && !n.enroll_token)
+      .map((n) => n.host_id)
+  }
+
+  /** Fingerprint drift: same id, different machine (S2 §3 residual-risk note). */
+  fingerprintOf(hostId) { return this.cache.get(hostId)?.fingerprint || null }
+
+  demoNodes() {
+    return [...this.cache.values()]
+      .filter((n) => n.kind === 'demo' && n.presence_class !== 'retired')
+      .map((n) => n.host_id)
   }
 
   // ---------- reads for the annotate path ----------
@@ -299,10 +393,29 @@ class Roster {
     return { ok: true, node: this.save({ ...node, display_name: clean }) }
   }
 
+  // ---------- meta key/value (admin passphrase, demo preference) ----------
+
+  #metaGet(key) {
+    return this.db.prepare('SELECT value FROM meta WHERE key = ?').get(key)?.value ?? null
+  }
+
+  #metaSet(key, value) {
+    this.db.prepare(`
+      INSERT INTO meta (key, value) VALUES (?,?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(key, value)
+  }
+
+  /** The demo switch is a server-side preference: it must survive a restart. */
+  setDemoEnabled(on) { this.#metaSet('demo_enabled', on ? '1' : '0') }
+  demoEnabledStored() {
+    const v = this.#metaGet('demo_enabled')
+    return v === null ? null : v === '1'
+  }
+
   // ---------- admin passphrase (S1 §5.2: default deny) ----------
 
   hasPassphrase() {
-    return !!this.db.prepare("SELECT value FROM meta WHERE key = 'admin_pass'").get()
+    return !!this.#metaGet('admin_pass')
   }
 
   setPassphrase(next, old) {
@@ -314,18 +427,15 @@ class Roster {
     }
     const salt = randomBytes(16).toString('hex')
     const hash = scryptSync(next, salt, 64).toString('hex')
-    this.db.prepare(`
-      INSERT INTO meta (key, value) VALUES ('admin_pass', ?)
-      ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
-      .run(`scrypt$${salt}$${hash}`)
+    this.#metaSet('admin_pass', `scrypt$${salt}$${hash}`)
     return { ok: true }
   }
 
   checkPassphrase(pass) {
     if (typeof pass !== 'string' || !pass) return false
-    const row = this.db.prepare("SELECT value FROM meta WHERE key = 'admin_pass'").get()
-    if (!row) return false
-    const [scheme, salt, hash] = String(row.value).split('$')
+    const stored = this.#metaGet('admin_pass')
+    if (!stored) return false
+    const [scheme, salt, hash] = String(stored).split('$')
     if (scheme !== 'scrypt' || !salt || !hash) return false
     const cand = scryptSync(pass, salt, 64)
     const want = Buffer.from(hash, 'hex')

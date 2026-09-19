@@ -5,6 +5,8 @@
 import { evaluateHost, evaluateCluster, thresholds } from './status.js';
 import { alertEngine } from './alerts.js';
 import { roster } from './roster.js';
+import { ingest } from './ingest.js';
+import { demoFleet } from './demo.js';
 
 const OFFLINE_TIMEOUT_MS = 15_000;
 
@@ -125,7 +127,15 @@ class MonitorStore {
       alerts: alertEngine.getLists(),
       thresholds,
       // S1 §5.2: the UI greys out every write action until a passphrase exists.
-      admin: { passphrase_set: roster.hasPassphrase() },
+      // S2 §3: the same block carries the ingest-credential state, so a v1 Agent
+      // running without a key is visible in the UI instead of being a footnote
+      // in a server log nobody reads.
+      admin: {
+        passphrase_set: roster.hasPassphrase(),
+        ingest_mode: ingest.mode,
+        keyless_agents: roster.keylessAgents(),
+        demo: demoFleet.info(),
+      },
       new_nodes: roster.unconfirmed().map((n) => n.host_id),
       hosts,
     };

@@ -97,10 +97,16 @@ roster.setMute('new-1', Date.now() - 1)
 ok('A11 过期的静默自动失效', roster.isMuted('new-1') === false)
 roster.setMute('new-1', null)
 
+/* The credential field is `node_key` since S2 (`token` was the S1 name for the
+   same column). Keep asserting BOTH halves of the promise: the secret never
+   leaves the process, and the public projection still tells the UI whether the
+   node has one - otherwise a typo silently turns this test into a no-op. */
 ok('A12 publicOf 不泄漏 enroll_token / fingerprint', (() => {
-  roster.ensure('sec-1', { hostname: 'sec', token: 'tok-secret', fingerprint: 'fp-secret' })
+  roster.ensure('sec-1', { hostname: 'sec', node_key: 'tok-secret', fingerprint: 'fp-secret' })
+  const n = roster.get('sec-1')
   const pub = JSON.stringify(roster.publicOf('sec-1'))
   return !pub.includes('tok-secret') && !pub.includes('fp-secret')
+    && n.enroll_token === 'tok-secret' && !!n.fingerprint
     && roster.publicOf('sec-1').has_credential === true
 })())
 
@@ -309,18 +315,23 @@ ok('D7 口令以 scrypt 散列入库，明文不落盘',
   String(metaRows[0]?.value).slice(0, 20) + '…')
 
 // ---------- E. end to end against a real Server on throwaway ports ----------
+/* Section E is about roster semantics, and its agents are the v1 kind: no
+   credential at all. S2 made credential-less *new* nodes refused by default, so
+   this Server runs with the escape valve open; sections F/G cover the policy
+   itself, including that legacy agents are accepted but never invisible. */
 const CHILD_ENV = {
   ...process.env,
   HISTORY_CONFIG: CFG, HM_ROSTER_DB: ROSTER_DB,
   HM_AGENT_PORT: '9300', HM_CLIENT_PORT: '9301',
+  HM_INGEST_TOKEN: 'off',
 }
 const { WebSocket } = await import('ws')
 const REST = 'http://127.0.0.1:9301'
 const INGEST = 'ws://127.0.0.1:9300'
 
-async function withServer(fn) {
+async function withServer(fn, env = CHILD_ENV) {
   const child = spawn(process.execPath, [path.join(HERE, '..', 'src', 'index.js')], {
-    cwd: path.join(HERE, '..'), env: CHILD_ENV, stdio: ['ignore', 'pipe', 'pipe'],
+    cwd: path.join(HERE, '..'), env, stdio: ['ignore', 'pipe', 'pipe'],
   })
   child.stdout.on('data', (d) => { if (process.env.HM_VERBOSE) process.stdout.write(`[srv] ${d}`) })
   child.stderr.on('data', (d) => process.stderr.write(`[srv!] ${d}`))
@@ -351,6 +362,27 @@ function snapshot() {
 function connectAgent(hostId, hostname, extra = {}) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(INGEST)
+    let settled = false
+    const ack = new Promise((r) => { ws.ackThen = r })
+    const closed = new Promise((r) => { ws.closedThen = r })
+    // S2: the register ack now carries the node key, and a refusal is an
+    // application-level close - both are things the tests assert on.
+    ws.on('message', (raw) => {
+      try {
+        const m = JSON.parse(raw.toString())
+        if ((m.type === 'registered' || m.type === 'rejected') && !settled) {
+          settled = true
+          ws.ackThen(m)
+        }
+      } catch { /* ignore non-JSON */ }
+    })
+    ws.on('close', (code, reason) => {
+      ws.closeInfo = { code, reason: String(reason || '') }
+      ws.closedThen(ws.closeInfo)
+      if (!settled) { settled = true; ws.ackThen({ type: 'closed', code }) }
+    })
+    ws.ack = ack
+    ws.closed = closed
     ws.on('open', () => {
       ws.send(JSON.stringify({
         type: 'register', host_id: hostId, hostname, platform: 'test', role: 'other', ...extra,
@@ -469,6 +501,212 @@ await withServer(async () => {
     row?.display_name === '我的游戏本', row?.display_name)
   c.close()
 })
+
+// ---------- F. S2: pairing codes, ingest policy, demo fleet (in-process) ----------
+const { ingest } = await import('../src/ingest.js')
+const { demoFleet } = await import('../src/demo.js')
+const { store } = await import('../src/store.js')
+
+/* F1-F2: the pairing code's own accounting. A code is a spend-limited voucher,
+   so its lifecycle is worth testing apart from the socket path. */
+const c1 = roster.issueEnroll({ ttlMin: 15, maxUses: 2, note: 'bench' })
+ok('F1 配对码是 12 位 hex 且带 TTL/次数',
+  /^[0-9a-f]{12}$/.test(c1.code) && c1.max_uses === 2
+  && c1.expires_at - Date.now() > 14 * 60_000 && c1.expires_at - Date.now() <= 15 * 60_000)
+const u1 = roster.consumeEnroll(c1.code, 'x-1')
+const u2 = roster.consumeEnroll(c1.code, 'x-2')
+ok('F2 逐次消费并记剩余；用完即死',
+  u1.ok && u1.remaining === 1 && u2.ok && u2.remaining === 0
+  && roster.consumeEnroll(c1.code, 'x-3').reason === 'code_used_up',
+  JSON.stringify({ u1, u2 }))
+ok('F2b 过期码按原因拒绝（不是静默放行）',
+  roster.consumeEnroll(c1.code, 'x-4', c1.expires_at + 1).reason === 'code_expired')
+ok('F2c 不存在的码 unknown_code',
+  roster.consumeEnroll('ffffffffffff', 'x').reason === 'unknown_code')
+ok('F2d 同一台机器重复用码，paired_ids 不重复',
+  (() => {
+    const c = roster.issueEnroll({ maxUses: 3 })
+    roster.consumeEnroll(c.code, 'dup'); roster.consumeEnroll(c.code, 'dup')
+    return JSON.stringify(roster.activeCodes().find((r) => r.code === c.code).paired_ids) === '["dup"]'
+  })())
+
+/* F3-F7: the three modes. setMode() is the test hook; production reads env. */
+const legacyMode = ingest.setMode('legacy')
+ok('F3 legacy（默认档）：陌生节点无凭据被拒',
+  ingest.authorize({ hostId: 'ghost-1', addr: '198.51.100.7' }).ok === false)
+{
+  const ev = ingest.recentEvents()[0]
+  ok('F3b 被拒进了台账，且地址只到网段',
+    ev?.host_id === 'ghost-1' && ev?.reason === 'unknown_host'
+    && ev?.addr === '198.51.*.*' && !/\.\d+\.\d+$/.test(ev.addr),
+    JSON.stringify(ev))
+}
+const pc = roster.issueEnroll({ ttlMin: 5, maxUses: 1 })
+const v1 = ingest.authorize({ hostId: 'pair-1', token: pc.code, addr: '198.51.100.8' })
+ok('F4 有效配对码换来一个 32 位节点密钥',
+  v1.ok && v1.paired && /^[0-9a-f]{32}$/.test(v1.node_key || ''))
+store.register('pair-1', {
+  hostname: 'PairBox', kind: 'agent', node_key: v1.node_key, confirmed: true,
+  agent_version: '2.0.0', fingerprint: 'fp-a',
+})
+ok('F4b 配对即确认：不再进待确认引导，且名册记住了密钥',
+  roster.nodeKeyOf('pair-1') === v1.node_key
+  && roster.publicOf('pair-1').confirmed === true
+  && roster.publicOf('pair-1').has_credential === true)
+ok('F4c 密钥不出现在任何公开投影',
+  !JSON.stringify(roster.publicOf('pair-1')).includes(v1.node_key))
+ok('F4d 之后凭节点密钥直连；配对码不能复用',
+  ingest.authorize({ hostId: 'pair-1', token: v1.node_key }).ok === true
+  && ingest.authorize({ hostId: 'pair-2', token: pc.code }).reason === 'code_used_up')
+roster.ensure('old-1', { hostname: 'OldBox' })
+ok('F5 legacy 宽限：已入册但无密钥的 v1 Agent 可用，并且被点名',
+  ingest.authorize({ hostId: 'old-1' }).ok === true && roster.keylessAgents().includes('old-1'))
+ingest.setMode('strict')
+ok('F5b strict 拒绝无密钥的老 Agent（reason=bad_key）',
+  ingest.authorize({ hostId: 'old-1' }).reason === 'bad_key')
+ok('F5c strict 仍接受带密钥节点',
+  ingest.authorize({ hostId: 'pair-1', token: v1.node_key }).ok === true)
+ingest.setMode('off')
+ok('F5d off 是逃生阀：一切照旧', ingest.authorize({ hostId: 'whoever-9' }).ok === true)
+ingest.setMode(legacyMode)
+ok('F6 一条连接不能改写别的节点，也不接受未注册的连接',
+  ingest.frameHostMatches('pair-1', 'pair-2') === false
+  && ingest.frameHostMatches('pair-1', 'pair-1') === true
+  && ingest.frameHostMatches('pair-1', undefined) === true
+  && ingest.frameHostMatches(null, 'pair-1') === false)
+ingest.authorize({ hostId: 'pair-1', token: v1.node_key, fingerprint: 'fp-b' })
+ok('F7 指纹漂移：接受但在台账里留痕（重装系统不该把自己锁在外）',
+  ingest.recentEvents().some((e) => e.reason === 'fingerprint_drift' && e.accepted === true))
+
+/* F8-F9: the demo fleet. These assert the honesty rules from S2 §5 directly:
+   props are marked, they move no real-fleet number, and off really is off. */
+store.register('real-9', { hostname: 'RealBox', kind: 'agent', confirmed: true })
+store.updateMetrics('real-9', {
+  host_id: 'real-9', cpu: { usage_percent: 50 }, memory: { percent: 50 }, gpu: [],
+})
+const snap0 = store.getSnapshot()
+demoFleet.attach(store).setEnabled(true)
+demoFleet.tick()
+const snap1 = store.getSnapshot()
+const props = snap1.hosts.filter((h) => h.kind === 'demo')
+ok('F8 演示机群 4 台，名字一律带 模拟- 前缀',
+  props.length === 4 && props.every((h) => h.display_name.startsWith('模拟-'))
+  && props.every((h) => h.host_id.startsWith('sim-')),
+  props.map((h) => h.display_name).join(','))
+ok('F8b 道具不进健康度/在线分母/聚合负载',
+  snap1.cluster.total === snap0.cluster.total && snap1.cluster.health === snap0.cluster.health
+  && snap1.cluster.demo.total === 4
+  && snap1.cluster.aggregate.cpu.avg === snap0.cluster.aggregate.cpu.avg,
+  JSON.stringify({ t0: snap0.cluster.total, t1: snap1.cluster.total, agg: snap1.cluster.aggregate.cpu }))
+{
+  /* The card colour is the DEBOUNCED level (P2 contract), so one frame over the
+     threshold is legitimately still OK. What must be true immediately is that
+     the metric really crossed the line, that the real fleet does not move, and
+     that nothing entered the alert list yet. G waits out the window for the
+     other half of the claim: props do reach the alert panel once debounced. */
+  const media = props.find((h) => h.host_id === 'sim-media')
+  ok('F8c 影音道具的磁盘确实越了 WARN 线，真机健康度不动',
+    media?.status.components.disk.level === 'WARN' && media.status.level === 'OK'
+    && snap1.cluster.health === 'OK'
+    && !snap1.alerts.active.some((a) => a.host_id === 'sim-media'),
+    JSON.stringify({ inst: media?.status.components.disk, lvl: media?.status.level }))
+}
+{
+  // The ephemeral prop needs to look like it left a while ago; waiting out the
+  // store's own 15s timeout would only make the suite slow.
+  store.hosts.get('sim-tmpnote').lastSeen = Date.now() - 20_000
+  const s = store.getSnapshot()
+  const note = s.hosts.find((h) => h.host_id === 'sim-tmpnote')
+  ok('F8d 演示自带一台离场机：ABSENT 且绝不进告警',
+    note?.status.absent === true && note.status.level === 'OFFLINE'
+    && !s.alerts.active.some((a) => a.host_id === 'sim-tmpnote'))
+}
+ok('F8e 演示开关是服务端事实，重启后维持', roster.demoEnabledStored() === true)
+demoFleet.setEnabled(false)
+const snap2 = store.getSnapshot()
+/* demoNodes() is a *roster* query ("every non-retired row tagged demo"), and
+   section A hand-made such a row (demo-1) that nobody retired. The generator's
+   own promise is narrower: none of ITS props is still live. */
+const propsLeft = roster.demoNodes().filter((id) => id.startsWith('sim-'))
+ok('F9 关掉演示是真的关：生成停了、节点退役、分母归零',
+  !snap2.hosts.some((h) => h.kind === 'demo') && snap2.cluster.demo.total === 0
+  && roster.demoEnabledStored() === false && propsLeft.length === 0
+  && demoFleet.info().enabled === false && demoFleet.info().count === 0,
+  JSON.stringify({ hosts: snap2.hosts.filter((h) => h.kind === 'demo').map((h) => h.host_id),
+                   demo: snap2.cluster.demo, stored: roster.demoEnabledStored(),
+                   propsLeft }))
+
+// ---------- G. S2 end to end: a real Server in its shipped (legacy) mode ----------
+await withServer(async () => {
+  const rogue = await connectAgent('rogue-1', 'RogueBox')
+  const rr = await rogue.ack
+  const ci = await Promise.race([rogue.closed, new Promise((r) => setTimeout(() => r(null), 2_000))])
+  ok('G1 无凭据的陌生机器：拿到原因后被断开（4001）',
+    rr.type === 'rejected' && rr.reason === 'unknown_host' && ci?.code === 4001,
+    JSON.stringify({ rr, ci }))
+  ok('G1b 被拒的节点没有进名册', !(await get('/api/roster')).nodes.some((n) => n.host_id === 'rogue-1'))
+
+  const noPass = await post('/api/admin/enroll', {})
+  ok('G2 签发配对码同样要口令', noPass.status === 403)
+  const mint = await post('/api/admin/enroll', { ttl_minutes: 10, max_uses: 2 }, 'another')
+  ok('G2b 配对码只在签发响应里出现明文，并带上可粘贴的地址',
+    mint.status === 200 && /^[0-9a-f]{12}$/.test(mint.json.code)
+    && mint.json.host === '127.0.0.1' && mint.json.agent_port === 9300)
+
+  const ag = await connectAgent('pair-2', 'PairedBox', { token: mint.json.code })
+  const ack = await ag.ack
+  ok('G3 带配对码注册成功，ack 把节点密钥交回 Agent 落盘',
+    ack.type === 'registered' && /^[0-9a-f]{32}$/.test(ack.node_key || ''))
+  const r2 = await get('/api/roster')
+  const p2 = r2.nodes.find((n) => n.host_id === 'pair-2')
+  ok('G3b 配对进来的机器已确认、已带凭据',
+    p2?.confirmed === true && p2?.has_credential === true && p2?.presence_class === 'persistent')
+
+  await new Promise((res) => setTimeout(res, 400))
+  ag.close()
+  await new Promise((res) => setTimeout(res, 400))
+  const again = await connectAgent('pair-2', 'PairedBox', { token: ack.node_key })
+  const ack2 = await again.ack
+  ok('G4 第二次启动凭节点密钥接入，不再消耗配对码',
+    ack2.type === 'registered' && !ack2.node_key)
+  const codes = await get('/api/enroll')
+  const spent = codes.codes.find((c) => c.code_tail === mint.json.code.slice(-4))
+  ok('G4b 配对码只花了一次（密钥直连没有重复计数）', spent?.uses === 1, `uses=${spent?.uses}`)
+  ok('G5 读接口只回配对码尾号，绝不回明文',
+    codes.codes.every((c) => !('code' in c)) && !!spent)
+  ok('G5b 未带凭据的 v1 Agent 在页面上可见，不藏在日志里',
+    codes.ingest.mode === 'legacy' && codes.ingest.keyless_agents.includes('live-1'),
+    JSON.stringify({ mode: codes.ingest.mode, keyless: codes.ingest.keyless_agents }))
+
+  const sBefore = await snapshot()
+  const on = await post('/api/admin/demo', { enabled: true }, 'another')
+  // Past the 3-cycle debounce window: the props must behave like real machines
+  // in every other respect, which includes firing their own alerts.
+  await new Promise((res) => setTimeout(res, 7_000))
+  const sOn = await snapshot()
+  ok('G6 演示开关走服务端+口令：4 台道具上线，卡片数增加',
+    on.status === 200 && sOn.cluster.demo.total === 4
+    && sOn.hosts.length === sBefore.hosts.length + 4)
+  ok('G6d 道具的告警照常进面板（防抖后），但真机健康度不因此改变',
+    sOn.alerts.active.some((a) => a.host_id === 'sim-media' && a.metric === 'disk')
+    && sOn.cluster.health === sBefore.cluster.health,
+    JSON.stringify({ act: sOn.alerts.active.map((a) => `${a.host_id}/${a.metric}`),
+                     h0: sBefore.cluster.health, h1: sOn.cluster.health }))
+  const off = await post('/api/admin/demo', { enabled: false }, 'another')
+  await new Promise((res) => setTimeout(res, 2_600))
+  const sOff = await snapshot()
+  ok('G6b 开关切换前后，真实集群的数字一字未动',
+    off.status === 200 && sOff.cluster.health === sOn.cluster.health
+    && sOff.cluster.total === sOn.cluster.total && sOff.cluster.online === sOn.cluster.online
+    && JSON.stringify(sOff.cluster.aggregate) === JSON.stringify(sOn.cluster.aggregate)
+    && sOff.cluster.demo.total === 0,
+    JSON.stringify({ h: sOff.cluster.health, t: sOff.cluster.total, d: sOff.cluster.demo }))
+  ok('G6c 没有口令时连演示开关也 403', (await post('/api/admin/demo', { enabled: true })).status === 403)
+  ok('G6e 关演示时它的告警以"已退役"关闭，不会伪装成"已恢复"',
+    sOff.alerts.resolved.some((a) => a.host_id === 'sim-media' && a.cancelled === 'retired'),
+    JSON.stringify(sOff.alerts.resolved.map((a) => `${a.host_id}/${a.metric}:${a.cancelled}`)))
+  again.close()
+}, { ...CHILD_ENV, HM_INGEST_TOKEN: 'legacy' })
 
 history.db?.close?.()
 console.log(`\n[selftest-s1] pass=${pass} fail=${fail}   dir=${DIR}`)

@@ -20,6 +20,8 @@ import { evaluateCluster } from './status.js';
 import { history } from './history.js';
 import { alertEngine } from './alerts.js';
 import { roster, CLASSES } from './roster.js';
+import { ingest } from './ingest.js';
+import { demoFleet } from './demo.js';
 
 // Overridable so the self-test can run a throwaway Server beside a live one.
 const AGENT_PORT = Number(process.env.HM_AGENT_PORT) || 9100;
@@ -40,6 +42,11 @@ try {
 // P5: replay persisted active alerts so a restart doesn't lose them (design §7).
 alertEngine.restoreActive(history.activeAlertRows());
 
+// S2 §5: the demo fleet writes straight into the store; it is off unless it was
+// switched on before (roster meta) or explicitly pre-armed with HM_DEMO=1.
+demoFleet.attach(store);
+demoFleet.autoStart();
+
 // ============================================================
 // Agent WebSocket Server (port 9100)
 // ============================================================
@@ -56,31 +63,50 @@ agentWss.on('connection', (ws, req) => {
       const msg = JSON.parse(raw.toString());
 
       if (msg.type === 'register') {
+        const v = ingest.authorize({
+          hostId: msg.host_id,
+          token: msg.token,
+          addr: agentAddr,
+          fingerprint: msg.fingerprint,
+        });
+        if (!v.ok) {
+          // Say why, then hang up: a silent close reads as a network fault and
+          // the person holding the wrong code never learns to go get a new one.
+          ws.send(JSON.stringify({ type: 'rejected', reason: v.reason }));
+          ws.close(4001, v.reason);
+          return;
+        }
         hostId = msg.host_id;
         store.register(hostId, {
           hostname: msg.hostname,
           platform: msg.platform,
           role: msg.role,
           topology: msg.topology,  // Pass topology through
-          // S1 §1: carried and stored for evidence, deliberately NOT validated
-          // yet. Enforcing the enrol token would require touching the three
-          // production Agents, which the iteration cadence rule forbids until
-          // S2 (where the Agent config and the deployable are rebuilt anyway).
-          token: msg.token,
           agent_version: msg.agent_version,
           fingerprint: msg.fingerprint,
           kind: msg.kind,
+          // S2 §2: pairing mints the node's standing key, which the Agent then
+          // keeps in agent.json. Deliberately not echoed to any read endpoint.
+          node_key: v.node_key || null,
+          confirmed: !!v.paired,
         });
-        console.log(`[Server] Agent registered: ${hostId} (${msg.hostname}) role=${msg.role || 'other'}`);
+        console.log(`[Server] Agent registered: ${hostId} (${msg.hostname}) role=${msg.role || 'other'}` +
+          `${v.paired ? ' [paired]' : v.legacy ? ' [no credential - legacy grace]' : ''}`);
         if (msg.topology) {
           const t = msg.topology;
           console.log(`[Server]   Topology: ${t.cpu?.model}, ` +
             `${t.memory?.sticks?.length || 0} DIMM, ` +
             `${t.gpu?.length || 0} GPU`);
         }
-        ws.send(JSON.stringify({ type: 'registered', host_id: hostId, probe_plan: probePlan }));
+        ws.send(JSON.stringify({
+          type: 'registered', host_id: hostId, probe_plan: probePlan,
+          node_key: v.node_key || undefined,
+        }));
       } else if (msg.type === 'metrics') {
-        hostId = msg.host_id || hostId;
+        // S2 §4: one connection writes one node. Anything else is refused per
+        // frame and lands in the ingest event log.
+        if (!ingest.frameHostMatches(hostId, msg.host_id, agentAddr)) return;
+        hostId = hostId || msg.host_id;
         if (hostId) store.updateMetrics(hostId, msg);
       }
     } catch (err) {
@@ -195,6 +221,47 @@ app.post('/api/roster/:hostId/name', requireAdmin, (req, res) => {
   const r = roster.setDisplay(req.params.hostId, (req.body || {}).name);
   if (!r.ok) return res.status(400).json({ error: r.error });
   res.json({ ok: true, node: roster.publicOf(req.params.hostId) });
+});
+
+// ============================================================
+// S2: pairing (design §2) - codes are minted behind the passphrase and are
+// never readable back. The plaintext lives in the issuing response and in the
+// page that showed it, nowhere else, so a pass-by visitor cannot list them.
+// ============================================================
+app.post('/api/admin/enroll', requireAdmin, (req, res) => {
+  const b = req.body || {};
+  const r = roster.issueEnroll({
+    ttlMin: Number(b.ttl_minutes) || 15,
+    maxUses: b.max_uses === undefined || b.max_uses === null ? 1 : Number(b.max_uses),
+    note: b.note,
+  });
+  // The address the page was opened on is the best guess for what a guest
+  // should paste; the pairing UI keeps it editable for the localhost case.
+  const host = (req.headers.host || '').split(':')[0] || '127.0.0.1';
+  console.log(`[Enroll] code minted (${r.max_uses || '∞'} use(s), ${Math.round((r.expires_at - Date.now()) / 60000)}min)`);
+  res.json({ ...r, host, agent_port: AGENT_PORT });
+});
+
+app.get('/api/enroll', (req, res) => {
+  res.json({
+    codes: roster.activeCodes().map(({ code, ...c }) => ({ ...c, code_tail: code.slice(-4) })),
+    ingest: ingest.info(),
+  });
+});
+
+app.post('/api/admin/enroll/revoke', requireAdmin, (req, res) => {
+  const r = roster.revokeEnroll(String((req.body || {}).code || ''));
+  if (!r.ok) return res.status(404).json({ error: r.error });
+  res.json({ ok: true });
+});
+
+// S2 §5: the demo switch is a server-side fact, not a client filter - turning
+// it off stops the fake frames and retires the props, so their alerts close as
+// `retired` (honest wording) instead of lingering as unexplained red.
+app.post('/api/admin/demo', requireAdmin, (req, res) => {
+  const on = !!(req.body || {}).enabled;
+  const r = demoFleet.setEnabled(on);
+  res.json({ ok: r.ok, demo: demoFleet.info() });
 });
 
 // Production hosting: serve the built client (client/dist) so the whole
