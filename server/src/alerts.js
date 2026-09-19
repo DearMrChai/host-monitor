@@ -35,7 +35,10 @@ const unknownGraceMs = () => (alertCfg().unknown_alert_grace_minutes ?? 5) * 60_
 
 const RANK = { OK: 0, WARN: 1, CRIT: 2, OFFLINE: 3 }
 
-class AlertEngine {
+/* Exported as well as instantiated: the restart window (H14) is only testable
+   against a clock the test controls, and `advance(hosts, now)` is the half that
+   takes one - the singleton below is driven by wall time from the server loop. */
+export class AlertEngine {
   constructor() {
     /** @type {Map<string, object>} key -> entry */
     this.entries = new Map()
@@ -198,6 +201,7 @@ class AlertEngine {
 
   /** P5: rebuild active entries persisted before a restart (design §7). */
   restoreActive(rows) {
+    const now = Date.now()
     let n = 0
     for (const r of rows) {
       if (this.entries.has(r.id)) continue
@@ -208,6 +212,12 @@ class AlertEngine {
         underCycles: debounceCycles() - 1, // self-heals within 2 clean ticks
         value_at_trigger: r.value_at_trigger, latest_value: r.latest_value,
         threshold: r.threshold, started_at: r.started_at, resolved_at: null,
+        // H14: freeze it the moment it is restored, rather than letting the first
+        // tick notice. A row read back from disk is by definition a claim this
+        // process cannot yet back up with data - the Agent has not reconnected -
+        // and the gap between "snapshot served" and "first advance()" is exactly
+        // where a restart used to start the client's crit loop on its own.
+        _unknownSince: now,
       })
       n += 1
     }
@@ -263,6 +273,13 @@ class AlertEngine {
       // Hidden from banner / list / sound while the node is muted; the state
       // machine itself kept running untouched, so unmuting shows the truth.
       if (muted.has(e.host_id) && e.metric !== 'offline') continue
+      // H14: `frozen` is the Server admitting that it is holding this alert
+      // because it has *no* record of the host in this process - not because
+      // fresh data says the machine is breaching. It stays on the board (the
+      // box may well be on fire, and the alternative is deleting an open alert
+      // because we lost sight of it), but the client must not make noise over
+      // it, and after the grace it closes as 已失效.
+      const frozen = e.state === 'active' && e._unknownSince != null
       const a = {
         id: e.id, host_id: e.host_id, hostname: e.hostname,
         // Banner/list must call the node what the card calls it (S1b).
@@ -270,9 +287,14 @@ class AlertEngine {
         metric: e.metric, source: e.source, level: e.level, state: e.state,
         value_at_trigger: e.value_at_trigger, latest_value: e.latest_value,
         threshold: e.threshold, started_at: e.started_at, resolved_at: e.resolved_at,
+        // Omitted rather than set to `undefined`, and in one spread: a row that
+        // *carries* `frozen: undefined` reads as "not frozen" everywhere it is
+        // displayed but fails `'frozen' in row` for the next person, and JSON
+        // drops the key on the wire so the two views would disagree (G8).
         // The alert list is where a friend's tuned box is most likely to be
         // misread as a fleet-wide breach, so the tag has to survive here too (J3).
-        custom: e.custom === true ? true : undefined,
+        ...(e.custom === true ? { custom: true } : {}),
+        ...(frozen ? { frozen: true, frozen_since: e._unknownSince } : {}),
         // 'reclassified' | 'retired' | 'stale' | null - how an alert ended,
         // when it was not a recovery (S1b). The UI must not print 已恢复 for
         // any of them; each reason has its own wording in resolvedText().

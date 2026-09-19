@@ -82,6 +82,34 @@ export function resolvedText(a) {
   return '已恢复'
 }
 
+/* ---------- S6 §6 (H14): which alerts deserve the ear ----------
+   A FROZEN alert is the Server holding a claim it can no longer back up with
+   data: the process restarted and the Agent has not come back, or the machine
+   stopped reporting inside the grace window. It stays on the board - the box
+   may well be on fire, and the alternative is deleting an open alert because we
+   lost sight of it - but it must not start the crit loop. "I rebooted the
+   Server and it began screaming by itself" reads as a fault of the tool, and
+   the same entry closes as 已失效 a few minutes later anyway.
+   One predicate, because the one-shot and the loop are two call sites for one
+   decision, and a frozen row that can silence the loop but still chime is worse
+   than either alone. */
+
+export function isFrozen(a) {
+  return a?.frozen === true
+}
+
+/** Does any of these active alerts deserve sound right now? (CRIT/OFFLINE loop) */
+export function critLoopWanted(active) {
+  return (active || []).some(
+    (a) => !isFrozen(a) && (a.level === 'CRIT' || a.level === 'OFFLINE'))
+}
+
+export const FROZEN_TAG = '该机未再上报'
+
+export const FROZEN_HINT =
+  'Server 手里已无这台机器的任何数据（刚重启，或它再没连上来）。'
+  + '这条是冻结的旧结论：不鸣响，宽限期到点后自动标记为失效，不会写成"已恢复"。'
+
 /* Two roads lead to 缺席, and they say different things about the Server
    (S5 §5.1): `restart` is "this process has never seen it since boot", `silence`
    is "this process watched it go quiet past the degrade window". Printing the

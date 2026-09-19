@@ -1,8 +1,9 @@
 /**
  * S6 self-test: one runtime config source, hot reload, per-node overrides,
- * per-node probe plans. Covers S6-细化设计.md §1-§6 and closes H9 (split truth),
- * H7 (one threshold table for an异构 fleet) and H6 (one probe plan for every
- * node, wherever it is).
+ * per-node probe plans, frozen-vs-live alerts. Covers S6-细化设计.md §1-§6 and
+ * closes H9 (split truth), H7 (one threshold table for a heterogeneous fleet),
+ * H6 (one probe plan for every node, wherever it is) and H14 (an alert the
+ * Server can no longer back up with data must not make noise).
  *
  * Usage: node scripts/selftest-config.mjs
  * A-D run in-process against a throwaway roster DB; E spawns a real Server on
@@ -464,6 +465,86 @@ ok('F2 配置写入进了事件流，且措辞说清了"回落全局 / 下次重
 ok('F3 合并窗口内同一节点的"设了又清"是一行，且这行说的是最新状态（count 记账、文字不撒谎）',
   lineFor('box-a').length === 1 && lineFor('box-a')[0].count >= 2
   && lineFor('box-a')[0].text.includes('回落全局'), JSON.stringify(lineFor('box-a')[0]))
+
+/* ---------- G. 冻结 vs. 活告警（H14 / J7） ----------
+   The engine reads only `host_id` + `status.reasons`, so a synthetic frame plus
+   the clock `advance()` accepts covers the one window that needs no store, no
+   Agent and no sleep: "the Server is holding an alert it cannot back up".
+   `advance` rather than `tick`, because a restart window is measured in minutes
+   and a selftest may not. */
+const { AlertEngine } = await import('../src/alerts.js')
+const frame = (hostId, level = 'CRIT', value = 96, metric = 'cpu_usage') => ({
+  host_id: hostId, hostname: hostId, online: metric !== 'offline',
+  status: {
+    level,
+    reasons: [{ metric, source: 'agent', value, threshold: 95, level }],
+  },
+})
+const GKEY = 'box-c|cpu_usage|agent'
+const G0 = Date.now()
+{
+  const eng = new AlertEngine()
+  // debounce_cycles is 3 in the seed; the third tick is what promotes it.
+  for (let i = 0; i < 3; i++) eng.advance([frame('box-c')], G0 + i * 2000)
+  let act = eng.getLists().active.find((x) => x.id === GKEY)
+  ok('G1 有新数据支撑的 CRIT 不带冻结标记（H14 只降级"已经没数据"的那些）',
+    !!act && act.state === 'active' && act.frozen === undefined,
+    JSON.stringify(act && { state: act.state, frozen: act.frozen }))
+  // Grab the persisted row while it still says "active" - the stale closure below
+  // rewrites it, and G5 has to replay what a restarted process really reads.
+  const rowsWhileActive = history.activeAlertRows().filter((r) => r.id === GKEY)
+
+  // Same machine, same breach - but nothing is reporting any more.
+  eng.advance([], G0 + 6000)
+  act = eng.getLists().active.find((x) => x.id === GKEY)
+  ok('G2 上报断了：告警留在活动表里并被标成冻结，而不是静悄悄变成"已恢复"',
+    !!act && act.state === 'active' && act.frozen === true
+    && typeof act.frozen_since === 'number', JSON.stringify(act && { s: act.state, f: act.frozen }))
+
+  const graceMs = (config.thresholds.alert?.unknown_alert_grace_minutes ?? 5) * 60_000
+  eng.advance([], G0 + 6000 + Math.floor(graceMs / 2))
+  ok('G3 宽限期内仍然只是冻结（既不掉出活动表，也还不闭合成任何结论）',
+    eng.getLists().active.some((x) => x.id === GKEY && x.frozen === true))
+  eng.advance([], G0 + 6000 + graceMs + 2000)
+  const closed = eng.getLists().resolved.find((x) => x.id === GKEY)
+  ok('G4 宽限期到点闭合成 stale：界面上因此只能印"节点长期未上报"，永不印"已恢复"（J7）',
+    !eng.getLists().active.some((x) => x.id === GKEY)
+    && closed?.cancelled === 'stale' && closed?.state === 'resolved',
+    JSON.stringify(closed && { c: closed.cancelled, s: closed.state }))
+
+  // A brand new process reading the same disk: this is the "重启后自己响一阵" case.
+  const booted = new AlertEngine()
+  booted.restoreActive(rowsWhileActive)
+  const got = booted.getLists().active.find((x) => x.id === GKEY)
+  ok('G5 新进程把旧告警从盘上读回的瞬间就是冻结的（不等第一个 tick，否则第一帧快照就够客户端响起来）',
+    rowsWhileActive.length === 1 && !!got && got.frozen === true,
+    JSON.stringify({ rows: rowsWhileActive.length, f: got?.frozen }))
+
+  booted.advance([frame('box-c', 'CRIT', 99)], Date.now())
+  const back = booted.getLists().active.find((x) => x.id === GKEY)
+  ok('G6 Agent 回连并再次超限：冻结解除，这条重新变成有数据支撑的告警（该响就响）',
+    !!back && back.frozen === undefined && back.latest_value === 99,
+    JSON.stringify(back && { f: back.frozen, v: back.latest_value }))
+
+  // The safety side: a machine that is genuinely down must keep making noise.
+  const eng2 = new AlertEngine()
+  eng2.advance([frame('box-d', 'OFFLINE', null, 'offline')], Date.now())
+  const off = eng2.getLists().active.find((x) => x.host_id === 'box-d')
+  ok('G7 真的在失联（Server 有这台机器的记录、只是不上线）绝不冻结：可用性告警不许被降级',
+    !!off && off.metric === 'offline' && off.frozen === undefined,
+    JSON.stringify(off && { m: off.metric, f: off.frozen }))
+}
+{
+  // The sound decision itself is a client predicate (critLoopWanted); assert the
+  // contract the server promises it: the key is absent, never `false`.
+  const e = new AlertEngine()
+  e.advance([frame('box-e')], Date.now())
+  e.advance([frame('box-e')], Date.now() + 2000)
+  e.advance([frame('box-e')], Date.now() + 4000)
+  const live = e.getLists().active.find((x) => x.host_id === 'box-e')
+  ok('G8 活告警的行里根本没有 frozen 这个键（客户端判的是 === true，留个 false 是将来误读的坑）',
+    live && !('frozen' in live) && !('frozen_since' in live), JSON.stringify(live))
+}
 
 history.db?.close?.()
 roster.db?.close?.()

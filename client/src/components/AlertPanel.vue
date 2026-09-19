@@ -1,6 +1,9 @@
 <script setup>
 import { computed, ref, onUnmounted } from 'vue'
-import { LEVEL_RANK, STATUS_TEXT, formatReason, displayName, resolvedText } from '../lib/status.js'
+import {
+  LEVEL_RANK, STATUS_TEXT, formatReason, displayName, resolvedText,
+  isFrozen, FROZEN_TAG, FROZEN_HINT,
+} from '../lib/status.js'
 
 /* P2: driven by the debounced alert engine (active + resolved window),
    no longer by instantaneous reasons. */
@@ -37,7 +40,8 @@ function metricText(a) {
     <div v-if="!active.length" class="ap-empty">✓ 无活动告警</div>
     <div v-else>
       <div class="ap-item" v-for="a in active" :key="a.id"
-           :class="a.level.toLowerCase()" @click="emit('open', a.host_id)">
+           :class="[a.level.toLowerCase(), { frozen: isFrozen(a) }]"
+           @click="emit('open', a.host_id)">
         <span class="ap-dot" />
         <div class="ap-body">
           <div class="ap-name">{{ displayName(a) }}
@@ -50,6 +54,9 @@ function metricText(a) {
                  breach in the panel that says "look at me" (S6 §3 / J3). -->
             <em v-if="a.custom" class="ap-custom"
                 title="这条红线是该机自己的设置，不是全机群共识">该机自定义</em>
+            <!-- And the other half of "don't let a row claim more than we know":
+                 this one is not a live reading at all (S6 §6 / H14). -->
+            <em v-if="isFrozen(a)" class="ap-frozen" :title="FROZEN_HINT">{{ FROZEN_TAG }}</em>
           </div>
         </div>
       </div>
@@ -86,6 +93,10 @@ function metricText(a) {
 }
 .ap-item:hover { background: rgba(0,0,0,.03); border-color: var(--border); }
 .ap-item.done { cursor: default; opacity: .7; }
+/* H14: the row is an unretracted past claim, not a present one - dim it and say
+   why, rather than deleting it (deleting would read as "it recovered"). */
+.ap-item.frozen { opacity: .72; }
+.ap-item.frozen .ap-dot { opacity: .45; }
 .ap-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 4px; flex-shrink: 0; background: var(--green); }
 .ap-item.warn .ap-dot { background: var(--orange); }
 .ap-item.crit .ap-dot { background: var(--red); }
@@ -99,6 +110,12 @@ function metricText(a) {
 .ap-custom {
   font-style: normal; font-size: 9px; margin-left: 4px; padding: 0 4px;
   border: 1px dashed var(--text3); border-radius: 6px; color: var(--text3);
+}
+/* Dotted, not dashed: one shape already means "this line is not the fleet
+   default", and a second meaning needs a second shape, not a reused one. */
+.ap-frozen {
+  font-style: normal; font-size: 9px; margin-left: 4px; padding: 0 4px;
+  border: 1px dotted var(--text3); border-radius: 6px; color: var(--text3);
 }
 .ap-resolved { border-top: 1px dashed var(--border); padding-top: 6px; }
 .ap-resolved summary { font-size: 11px; color: var(--text3); cursor: pointer; }

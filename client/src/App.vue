@@ -9,7 +9,7 @@ import ClusterBar from './components/ClusterBar.vue'
 import AlertBanner from './components/AlertBanner.vue'
 import PassphraseDialog from './components/PassphraseDialog.vue'
 import KioskView from './views/KioskView.vue'
-import { LEVEL_RANK } from './lib/status.js'
+import { LEVEL_RANK, isFrozen, critLoopWanted } from './lib/status.js'
 import { admin, syncAdmin } from './lib/admin.js'
 import { unlock, playWarn, playCrit, setCritLoop } from './lib/sound.js'
 
@@ -86,7 +86,10 @@ const knownLevels = new Map()
 function handleSounds(active) {
   for (const a of active) {
     const prev = knownLevels.get(a.id)
-    if (prev === undefined || LEVEL_RANK[a.level] > LEVEL_RANK[prev]) {
+    const isNew = prev === undefined || LEVEL_RANK[a.level] > LEVEL_RANK[prev]
+    // A frozen row is not news, it is the past we have not been able to retract:
+    // chiming over it is how a Server restart ended up "screaming by itself" (H14).
+    if (isNew && !isFrozen(a)) {
       if (a.level === 'WARN') playWarn()
       else playCrit()
     }
@@ -96,7 +99,9 @@ function handleSounds(active) {
   for (const id of [...knownLevels.keys()]) {
     if (!liveIds.has(id)) knownLevels.delete(id)
   }
-  setCritLoop(active.some(a => a.level === 'CRIT' || a.level === 'OFFLINE'))
+  // Same predicate for the loop: one frozen CRIT must not keep the tone running,
+  // but it must not silence a live one sitting next to it either.
+  setCritLoop(critLoopWanted(active))
 }
 
 let ws = null
