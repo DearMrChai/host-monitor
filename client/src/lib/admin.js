@@ -103,10 +103,44 @@ export async function rosterPost(path, body, retry) {
     return { ok: false, denied: true }
   }
   if (!res.ok) {
-    flash(json.error || `操作失败（HTTP ${res.status}）`, 'err')
-    return { ok: false }
+    /* A rejected config write carries `errors: [人话…]` next to `error` (S6 §2:
+       validation refuses, it does not correct). One line per reason beats a
+       toast that says "不符合约束" while hiding which of the twelve fields is
+       wrong — and the caller still gets `errors` if it wants to mark rows. */
+    const errs = Array.isArray(json.errors) ? json.errors.filter(Boolean) : []
+    flash(errs.length ? `${json.error || '操作失败'}：${errs.join('；')}`
+                      : (json.error || `操作失败（HTTP ${res.status}）`), 'err')
+    return { ok: false, errors: errs }
   }
   return { ok: true, json }
+}
+
+/**
+ * The one gated *read* path (S6 §5: /api/admin/config). It exists so the
+ * passphrase does not acquire a second home the moment a page needs unmasked
+ * values — a settings form that read the open endpoint would be looking at
+ * `192.168.*.*`, and saving that back would retarget the probes.
+ *
+ * Unlike rosterPost this does not open the dialog on its own: a page can cope
+ * with "no unmasked view this round" by falling back to the read-only one,
+ * which is a better outcome than an interrupt over a GET.
+ */
+export async function adminGet(path) {
+  const headers = {}
+  if (admin.stored) headers['x-hm-admin'] = admin.stored
+  let res
+  try {
+    res = await fetch(path, { headers })
+  } catch {
+    return { ok: false, error: '服务器不可达' }
+  }
+  const text = await res.text()
+  if (res.status === 403) {
+    if (admin.stored) remember('')
+    return { ok: false, denied: true }
+  }
+  if (!res.ok) return { ok: false, error: `HTTP ${res.status}` }
+  try { return { ok: true, json: JSON.parse(text) } } catch { return { ok: false, error: '响应不是 JSON' } }
 }
 
 /**

@@ -44,7 +44,13 @@ function metricText(a) {
             <em>{{ STATUS_TEXT[a.level] }}</em>
             <span class="ap-dur">{{ duration(a) }}</span>
           </div>
-          <div class="ap-reason">{{ metricText(a) }}</div>
+          <div class="ap-reason">{{ metricText(a) }}
+            <!-- Same reason as on the card, and this is the louder of the two
+                 places: a friend's tuned box must not read as a fleet-wide
+                 breach in the panel that says "look at me" (S6 §3 / J3). -->
+            <em v-if="a.custom" class="ap-custom"
+                title="这条红线是该机自己的设置，不是全机群共识">该机自定义</em>
+          </div>
         </div>
       </div>
     </div>
@@ -88,6 +94,12 @@ function metricText(a) {
 .ap-name em { font-style: normal; font-size: 10px; color: var(--text2); font-weight: 400; }
 .ap-dur { margin-left: auto; font-size: 10px; color: var(--text3); font-weight: 400; }
 .ap-reason { font-size: 11px; color: var(--text2); margin-top: 2px; }
+/* Deliberately the same dashed-outline chip as the card's: one shape for "this
+   is not the fleet default", wherever it appears. */
+.ap-custom {
+  font-style: normal; font-size: 9px; margin-left: 4px; padding: 0 4px;
+  border: 1px dashed var(--text3); border-radius: 6px; color: var(--text3);
+}
 .ap-resolved { border-top: 1px dashed var(--border); padding-top: 6px; }
 .ap-resolved summary { font-size: 11px; color: var(--text3); cursor: pointer; }
 </style>

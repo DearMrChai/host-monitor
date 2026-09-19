@@ -55,6 +55,17 @@ REASON_CN = {
 
 EXIT_DENIED = 2
 
+# S6 §4 (H6): the Server names which plan it handed out, and this box is the one
+# place an operator can ask "why is it pinging that gateway". Without the source
+# the same log line reads identically for a plan that is right and a plan that
+# was inherited from another site.
+PLAN_SOURCE_CN = {
+    "node": "该机专属",
+    "site": "站点计划",
+    "global": "全局计划（未按站点区分）",
+    "none": "服务器未下发计划",
+}
+
 
 class Denied(Exception):
     """The server turned this connection away on purpose. Retrying in a loop
@@ -154,9 +165,17 @@ async def run_agent(cfg, interval, pair_only=False):
                     cfg.enroll_code = None    # spend it once, never again
                 plan = ack.get("probe_plan")
                 prober.apply_plan(plan)
+                src = ack.get("probe_plan_source")
+                src_text = PLAN_SOURCE_CN.get(src, src)
                 if plan:
                     print(f"[Agent] Probe plan: "
-                          f"{', '.join(t['id'] for t in prober._targets)}")
+                          f"{', '.join(t['id'] for t in prober._targets)}"
+                          + (f"  [来源 {src_text}]" if src_text else ""))
+                elif src == "none":
+                    # Say it out loud: "no gateway arm" because the Server has no
+                    # plan is a different fact from an old Server that sent no ack
+                    # at all (that case prints nothing here).
+                    print(f"[Agent] {src_text}，只探 Server 臂")
                 if pair_only:
                     # The prober has not started yet, so leaving the `async with`
                     # is the whole shutdown; --pair-only exists for installers

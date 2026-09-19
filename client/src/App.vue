@@ -4,6 +4,7 @@ import OverviewView from './views/OverviewView.vue'
 import TopologyView from './views/TopologyView.vue'
 import DetailView from './views/DetailView.vue'
 import EnrollView from './views/EnrollView.vue'
+import SettingsView from './views/SettingsView.vue'
 import ClusterBar from './components/ClusterBar.vue'
 import AlertBanner from './components/AlertBanner.vue'
 import PassphraseDialog from './components/PassphraseDialog.vue'
@@ -201,6 +202,10 @@ onBeforeUnmount(() => {
       <EnrollView v-else-if="route.name === 'enroll'"
                   class="app-main" :hosts="hosts"
                   @open="openDetail" />
+      <!-- S6 §5: the settings page takes `hosts` only to answer "which plan did
+           this Agent actually get" — the config document is its own read, and
+           the snapshot is not the place thresholds live. -->
+      <SettingsView v-else-if="route.name === 'settings'" class="app-main" :hosts="hosts" />
       <DetailView v-else class="app-main"
                   :host="currentHost" :connected="connected" :from="route.from"
                   :alerts="alerts" :thresholds="thresholds" @back="backFromDetail" />

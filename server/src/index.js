@@ -353,6 +353,30 @@ app.get('/api/config', (req, res) => {
   res.json(s);
 });
 
+/**
+ * The same document, unmasked, behind the gate — and the only read in this
+ * process that is. `GET /api/config` cannot carry real probe targets (they are
+ * LAN addresses on an open board), but an editor that only ever sees
+ * `192.168.*.*` would make every save a re-typing exercise, and a half-remembered
+ * gateway is a silent way to break the link arm. So the edit form reads this one.
+ * The hygiene suite whitelists the path *by name* with this reason attached.
+ */
+app.get('/api/admin/config', requireAdmin, (req, res) => {
+  const s = config.snapshot();
+  s.nodes = roster.active().map((n) => ({
+    host_id: n.host_id,
+    display_name: n.display_name,
+    owner: n.owner,
+    site: n.site,
+    role: n.role,
+    presence_class: n.presence_class,
+    thresholds: roster.nodeThresholds(n.host_id),
+    probes: roster.nodeProbes(n.host_id),
+    muted_until: roster.mutedUntil(n.host_id),
+  }));
+  res.json(s);
+});
+
 app.post('/api/admin/config/thresholds', requireAdmin, (req, res) => {
   const body = req.body || {};
   const before = { ...config.thresholds };

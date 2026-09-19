@@ -270,6 +270,9 @@ class AlertEngine {
         metric: e.metric, source: e.source, level: e.level, state: e.state,
         value_at_trigger: e.value_at_trigger, latest_value: e.latest_value,
         threshold: e.threshold, started_at: e.started_at, resolved_at: e.resolved_at,
+        // The alert list is where a friend's tuned box is most likely to be
+        // misread as a fleet-wide breach, so the tag has to survive here too (J3).
+        custom: e.custom === true ? true : undefined,
         // 'reclassified' | 'retired' | 'stale' | null - how an alert ended,
         // when it was not a recovery (S1b). The UI must not print 已恢复 for
         // any of them; each reason has its own wording in resolvedText().

@@ -106,6 +106,10 @@ const bars = computed(() => {
       <button :class="{ active: view === 'overview' }" @click="$emit('toggle', 'overview')">总览</button>
       <button :class="{ active: view === 'topology' }" @click="$emit('toggle', 'topology')">拓扑</button>
       <button :class="{ active: view === 'enroll' }" @click="$emit('toggle', 'enroll')">接入</button>
+      <!-- S6 §5: a fourth tab, not a dialog over the board — thresholds and probe
+           targets are read by the page that shows them, and a modal that can
+           invalidate what is behind it is worse than a page switch. -->
+      <button :class="{ active: view === 'settings' }" @click="$emit('toggle', 'settings')">设置</button>
     </div>
     <div class="cb-sound">
       <span v-if="!sound.unlocked" class="unlock-hint" @click="onBell">点击激活声音</span>

@@ -215,6 +215,12 @@ function pick(item) {
     <div class="hc-link" :title="linkTip">
       链路 <i class="lk-dot" :class="linkLevel ? linkLevel.toLowerCase() : 'na'" />
       <b :class="linkLevel ? linkLevel.toLowerCase() : 'na'">{{ linkText }}</b>
+      <!-- J5's second half: the plan this box runs was inherited, and a gateway
+           from another site is something it probably cannot see. This is the one
+           place in V2 where the board says "I am not sure" out loud. -->
+      <span class="lk-suspect" v-if="host.probe_plan_suspect"
+            title="该节点没有本站点的探测计划，现在探的是 Server 所在站点的网关——换个网络下大概率探不到。可在 设置 → 该节点 指定专属计划">
+        ⚠ 计划继承全局</span>
       <span class="hc-uptime" v-if="uptime">开机 {{ uptime }}</span>
     </div>
 
@@ -244,7 +250,11 @@ function pick(item) {
 
     <div class="hc-reasons" v-if="reasons.length">
       <div class="hcr" v-for="(r, i) in reasons" :key="i" :class="r.level.toLowerCase()">
-        {{ formatReason(r) }}
+        {{ formatReason(r) }}<!-- J3: a red line this node's owner moved must not look
+             like the fleet consensus - the next person would go edit the global
+             threshold, see nothing change here, and call the tool broken. -->
+        <em class="hcr-custom" v-if="r.custom"
+            title="这条阈值是该机自己的设置，不是全机群共识；改它请到 设置 → 该节点">该机自定义</em>
       </div>
     </div>
 
@@ -331,6 +341,9 @@ function pick(item) {
 .hc-link b.warn { color: var(--orange); }
 .hc-link b.crit { color: var(--red); }
 .hc-link b.offline { color: var(--text3); }
+/* Same ink as the rest of the link row: this is a caveat, not a fourth state -
+   the dot beside it already carries the level. */
+.lk-suspect { font-size: 10px; color: var(--text3); border-bottom: 1px dotted var(--text3); }
 .hc-uptime { margin-left: auto; font-size: 10px; }
 
 .hcb { display: flex; align-items: center; gap: 8px; }
@@ -352,6 +365,12 @@ function pick(item) {
 .hcr { font-size: 10px; color: var(--text2); }
 .hcr.warn { color: var(--warn-ink); }
 .hcr.crit { color: var(--crit-ink); }
+/* A tag, not a suffix inside the sentence: it has to survive the truncation of
+   the reason line and read as "about this number", not as part of the value. */
+.hcr-custom {
+  font-style: normal; font-size: 9px; margin-left: 4px; padding: 0 4px;
+  border: 1px dashed var(--text3); border-radius: 6px; color: var(--text3);
+}
 
 .hc-menu {
   position: absolute; top: 34px; right: 10px; z-index: 50; min-width: 172px;

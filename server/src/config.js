@@ -291,7 +291,10 @@ export function validateProbes(plan) {
     }
   }
   if (plan.site !== undefined && typeof plan.site !== 'string') errors.push('site 需要字符串');
-  if (plan.gateway !== undefined) errors.push(...probeTargetErrors(plan.gateway, 'gateway'));
+  // `null` means "this plan probes no gateway", which has to be sayable: the
+  // alternative was a form that could set a gateway but never remove one,
+  // because `undefined` cannot survive a JSON round trip from the client.
+  if (plan.gateway != null) errors.push(...probeTargetErrors(plan.gateway, 'gateway'));
   if (plan.key_hosts !== undefined) {
     if (!Array.isArray(plan.key_hosts)) errors.push('key_hosts 需要数组');
     else if (plan.key_hosts.length > 8) errors.push('key_hosts 最多 8 个（探测环预算有限，H3）');
@@ -304,7 +307,7 @@ export function validateProbes(plan) {
       // so it has to be a shaped token for both sides to be able to find it.
       if (!/^[a-z0-9_-]{1,20}$/.test(site)) { errors.push(`站点名 ${site} 需为小写字母/数字/-/_（≤20 字）`); continue; }
       if (!p || typeof p !== 'object') { errors.push(`sites.${site} 需要一个计划对象`); continue; }
-      errors.push(...probeTargetErrors(p.gateway, `sites.${site}.gateway`));
+      errors.push(...(p.gateway != null ? probeTargetErrors(p.gateway, `sites.${site}.gateway`) : []));
       if (p.key_hosts !== undefined) {
         if (!Array.isArray(p.key_hosts)) errors.push(`sites.${site}.key_hosts 需要数组`);
         else p.key_hosts.forEach((h, i) => errors.push(...probeTargetErrors(h, `sites.${site}.key_hosts[${i}]`)));

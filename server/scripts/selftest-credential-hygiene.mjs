@@ -70,6 +70,10 @@ function dbBytes(dir, base) {
 
 const { history } = await import('../src/history.js')
 const { roster } = await import('../src/roster.js')
+// Namespace import, not a named one: `probes` is an export of config.js too, and
+// a bare `import { snapshot }` would read as "the file's own value" rather than
+// "the live object inside the server process that answers the HTTP reads".
+const cfg = await import('../src/config.js')
 
 // ---------- A. G1: node keys land hashed ----------
 roster.ensure('hyg-box', { hostname: 'HygBox', role: 'server', node_key: LEGACY_KEY, fingerprint: FP })
@@ -195,6 +199,19 @@ const { app, _adminFails } = await import('../src/index.js')
   const reads = routes.filter((r) => r.methods.every((m) => m === 'GET' || m === 'HEAD'))
   ok('C3 读侧仍然开放（形态 A 的展示用途），且数量符合预期',
     reads.length >= 8, reads.map((r) => r.path).join(' '))
+  /* One exception to "reads are open", declared by name. A gated read is not a
+     leak risk by itself — the risk is that it becomes the place where unmasked
+     targets are allowed to live without anyone having said so. If a second
+     gated read ever appears, the honest move is to add it here *and* to D8's
+     reasoning, not to let C5 go red and get skipped. */
+  const GATED_READS = new Map([
+    ['/api/admin/config', '阈值/探测计划的编辑源：掩码值无法回写，故本机唯一带闸的读，返回未掩码目标（S6 §5）'],
+  ])
+  const gatedReads = reads.filter((r) => r.gated)
+  ok('C5 带闸的读端点只有白名单里那几个，且每条都写明了为什么需要口令',
+    gatedReads.every((r) => GATED_READS.has(r.path))
+    && [...GATED_READS.keys()].every((p) => gatedReads.some((r) => r.path === p)),
+    JSON.stringify({ gated: gatedReads.map((r) => r.path), open: reads.length - gatedReads.length }))
   /* Identity, not name: every gated route must hold the *same* function object,
      so a second copy of the gate — one that forgot the failure budget or the
      default-deny — cannot quietly appear next to the real one. */
@@ -343,6 +360,24 @@ let codePlain = null
     !JSON.stringify(snap).toLowerCase().includes('zt_addr')
     && !JSON.stringify(snap).toLowerCase().includes('presence_state')
     && snap.hosts?.some((h) => h.host_id === 'hyg-box'))
+
+  /* The single gated read, checked from both ends: it must not answer without the
+     passphrase, and it must not answer *with* the mask either — a masked value
+     that gets written back would silently retarget the probe. Whether the real
+     targets are 10.x or 192.168.x is not asserted (that is whoever's LAN this
+     runs on); "same bytes as the process's own config, no mask placeholder" is. */
+  const noKey = await get('/api/admin/config')
+  ok('D11 带闸的读无口令即 403（闸门复用写侧那一个实现，见 C4/C5）',
+    noKey.status === 403 && !noKey.text.includes('*.*') && !noKey.text.includes(PASS),
+    noKey.text.slice(0, 80))
+  const withKey = await fetch(`${REST}/api/admin/config`, { headers: { 'x-hm-admin': PASS } })
+  const adminText = await withKey.text()
+  const live = cfg.snapshot().probes
+  const shown = withKey.status === 200 ? JSON.parse(adminText).probes : null
+  ok('D11b 带口令时返回的就是进程手里的活配置，且未被掩码（编辑表单能原样回写）',
+    withKey.status === 200 && !adminText.includes('*.*')
+    && JSON.stringify(shown) === JSON.stringify(live),
+    JSON.stringify({ st: withKey.status, liveGw: live?.gateway ?? null, masked: adminText.includes('*.*') }))
   paired.close()
   denied.close()
 }
