@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onMounted, onBeforeUnmount } from 'vue'
-import { formatSeenLast, displayName } from '../lib/status.js'
+import { formatSeenLast, displayName, eventNamesHost } from '../lib/status.js'
 import {
   stream, KIND_TABS, WINDOWS, subscribe, unsubscribe, setKind, setWindow, refresh,
 } from '../lib/events.js'
@@ -92,7 +92,7 @@ function who(e) {
           @click="!hostId && e.host_id && $emit('open', e.host_id)">
         <i class="es-dot" />
         <span class="es-time">{{ formatSeenLast(e.ts) }}</span>
-        <span class="es-who" v-if="!hostId && e.host_id" :title="'host_id: ' + e.host_id">{{ who(e) }}</span>
+        <span class="es-who" v-if="!hostId && e.host_id && !eventNamesHost(e)" :title="'host_id: ' + e.host_id">{{ who(e) }}</span>
         <span class="es-text">{{ e.text }}</span>
         <span class="es-count" v-if="counted(e)">{{ counted(e) }}</span>
       </li>

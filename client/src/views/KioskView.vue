@@ -6,7 +6,7 @@ import { createFpsGuard } from '../lib/fps.js'
 import { stream, streamAgeMs, subscribe, unsubscribe } from '../lib/events.js'
 import { admin } from '../lib/admin.js'
 import { sound, toggleMute, unlock } from '../lib/sound.js'
-import { STATUS_TEXT, displayName, formatSeenLast, shortName } from '../lib/status.js'
+import { STATUS_TEXT, displayName, eventNamesHost, formatSeenLast, shortName } from '../lib/status.js'
 
 /**
  * KioskView (S4) — the 值守屏, i.e. density tier L0
@@ -117,12 +117,9 @@ const eventLine = computed(() => {
   }
   const who = e.host_name || displayName({ host_id: e.host_id })
   const what = String(e.text)
-  /* Presence rows are written "<name> 离场（…）": prefixing the name again would
-     say it twice on the line where every character costs the most. */
-  const named = (e.host_id && what.startsWith(e.host_id)) || what.startsWith(who)
   return {
     kind: e.level || 'OK',
-    text: `${formatSeenLast(e.ts)} ${shortName(named ? what : `${who} ${what}`, 40)}`,
+    text: `${formatSeenLast(e.ts)} ${shortName(eventNamesHost(e) ? what : `${who} ${what}`, 40)}`,
   }
 })
 

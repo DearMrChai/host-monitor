@@ -50,6 +50,22 @@ export function shortName(name, max = 8) {
   return s.length > max ? `${s.slice(0, max - 1)}…` : s
 }
 
+/**
+ * Does this event row's own text already name the node? Some server sentences
+ * carry it ("infer-142 未带凭据接入"), so a view that prefixes the node name of
+ * its own accord prints it twice - and on the kiosk line, where the whole row is
+ * 40 characters, the second copy buys nothing (S4 §1.3).
+ *
+ * One predicate for both surfaces: the panel and the wall must not disagree about
+ * whether a row is already labelled, and the server's wording is not something the
+ * display layer should keep in sync by hand.
+ */
+export function eventNamesHost(e) {
+  const text = String(e?.text ?? '')
+  return [e?.host_id, e?.host_name, e?.display_name]
+    .some((n) => n && text.startsWith(String(n)))
+}
+
 export function isAbsent(host) {
   return !host.online && host.status?.absent === true
 }
