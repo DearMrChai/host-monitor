@@ -4,7 +4,7 @@
   "mem":        { "warn": 85, "crit": 95 },
   "disk":       { "warn": 80, "crit": 90 },
   "gpu_temp":   { "warn": 80, "crit": 93 },
-  "rtt_ms":     { "warn": 5,  "crit": 50 },
+  "rtt_ms":     { "warn": 30, "crit": 100 },
   "packet_loss":{ "warn": 1,  "crit": 5 },
   "offline_seconds": 15,
   "alert": {
