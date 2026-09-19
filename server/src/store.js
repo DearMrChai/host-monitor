@@ -4,6 +4,7 @@
  */
 import { evaluateHost, evaluateCluster, thresholds } from './status.js';
 import { alertEngine } from './alerts.js';
+import { roster } from './roster.js';
 
 const OFFLINE_TIMEOUT_MS = 15_000;
 
@@ -15,8 +16,11 @@ class MonitorStore {
 
   /**
    * Register or update a host (now includes topology).
+   * The roster is the source of truth for how a node is *classified*; this
+   * store only holds what the Agent is reporting right now (S1 §2).
    */
   register(hostId, info = {}) {
+    roster.ensure(hostId, info);
     const existing = this.hosts.get(hostId);
     if (existing) {
       existing.hostname = info.hostname || existing.hostname;
@@ -56,6 +60,7 @@ class MonitorStore {
     host.metrics = metrics;
     host.lastSeen = Date.now();
     host.online = true;
+    roster.markSeen(hostId, host.lastSeen);
   }
 
   markDisconnected(hostId) {
@@ -77,12 +82,33 @@ class MonitorStore {
   }
 
   /**
-   * Annotated hosts: instant four-state, then debounced by the alert engine.
+   * Annotated hosts: roster facts attached, instant four-state, then debounced
+   * by the alert engine. Retired nodes are filtered out here so they leave the
+   * dashboard, every aggregate and the alert path in one stroke - their rows
+   * stay in the store (and their history stays queryable by host_id).
    */
   getAnnotatedHosts() {
     this.checkTimeouts();
-    const hosts = this.getAllHosts();
-    for (const host of hosts) host.status = evaluateHost(host);
+    const hosts = this.getAllHosts()
+      .filter((h) => roster.classOf(h.host_id) !== 'retired');
+    for (const host of hosts) {
+      const node = roster.get(host.host_id);
+      if (node) {
+        host.display_name = node.display_name;
+        host.presence_class = node.presence_class;
+        host.owner = node.owner;
+        host.site = node.site;
+        host.kind = node.kind;
+        host.confirmed = !!node.confirmed;
+        host.agent_version = node.agent_version;
+      } else {
+        host.presence_class = 'persistent';
+        host.display_name = host.hostname;
+        host.confirmed = false;
+      }
+      host.muted_until = roster.mutedUntil(host.host_id);
+      host.status = evaluateHost(host);
+    }
     alertEngine.tick(hosts);
     return hosts;
   }
@@ -95,6 +121,9 @@ class MonitorStore {
       cluster: evaluateCluster(hosts),
       alerts: alertEngine.getLists(),
       thresholds,
+      // S1 §5.2: the UI greys out every write action until a passphrase exists.
+      admin: { passphrase_set: roster.hasPassphrase() },
+      new_nodes: roster.unconfirmed().map((n) => n.host_id),
       hosts,
     };
   }

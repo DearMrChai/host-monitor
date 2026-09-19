@@ -13,6 +13,7 @@
  */
 import { thresholds } from './status.js'
 import { history } from './history.js'
+import { roster } from './roster.js'
 
 const cfg = thresholds.alert || {}
 const DEBOUNCE_CYCLES = cfg.debounce_cycles ?? 3
@@ -35,6 +36,9 @@ class AlertEngine {
    */
   tick(hosts) {
     const now = Date.now()
+    // Recomputed on EVERY call, not only on gated ticks: a mute the user just
+    // set must show up in the next snapshot (<1ms), not up to TICK_MS later.
+    this.muted = this.muteSet(hosts, now)
     if (now - this.lastTickAt >= TICK_MS) {
       this.lastTickAt = now
       this.advance(hosts, now)
@@ -42,11 +46,20 @@ class AlertEngine {
     this.apply(hosts)
   }
 
+  /** S1 §3.3: a muted node's thresholds are neither evaluated nor resolved -
+   *  the alert freezes where it was instead of faking a recovery. OFFLINE is
+   *  exempt from muting (availability is worth waking up for). */
+  muteSet(hosts, now = Date.now()) {
+    return new Set(hosts.filter((h) => roster.isMuted(h.host_id, now)).map((h) => h.host_id))
+  }
+
   advance(hosts, now) {
     const seen = new Set()
+    const muted = this.muted = this.muteSet(hosts, now)
 
     for (const host of hosts) {
       for (const r of host.status?.reasons || []) {
+        if (muted.has(host.host_id) && r.metric !== 'offline') continue
         const key = `${host.host_id}|${r.metric}|${r.source}`
         seen.add(key)
         let e = this.entries.get(key)
@@ -78,6 +91,9 @@ class AlertEngine {
 
     for (const [key, e] of this.entries) {
       if (seen.has(key)) continue
+      // Muted host: leave active entries as they are (frozen, hidden by
+      // getLists) and do not age out pending ones.
+      if (muted.has(e.host_id)) continue
       if (e.state === 'pending') {
         this.entries.delete(key) // window broken before firing
       } else if (e.state === 'active') {
@@ -131,6 +147,7 @@ class AlertEngine {
 
   apply(hosts) {
     const byHost = new Map()
+    const muted = this.muted || new Set()
     for (const e of this.entries.values()) {
       if (e.state === 'resolved') continue
       if (!byHost.has(e.host_id)) byHost.set(e.host_id, [])
@@ -141,6 +158,7 @@ class AlertEngine {
       const s = host.status
       if (!s) continue
       s.instant_level = s.level
+      s.muted = muted.has(host.host_id)
       const entries = byHost.get(host.host_id) || []
       const active = entries.filter((e) => e.state === 'active')
       const pending = entries.filter((e) => e.state === 'pending')
@@ -149,7 +167,10 @@ class AlertEngine {
       for (const e of active) {
         if (!debounced || RANK[e.level] > RANK[debounced]) debounced = e.level
       }
-      s.level = debounced || 'OK'
+      // Offline is not debounced (it fires immediately), and an ephemeral node
+      // deliberately produces no offline reason - so its level must pass
+      // through from the instant evaluation instead of collapsing to OK.
+      s.level = host.online ? (debounced || 'OK') : (s.instant_level || 'OFFLINE')
 
       s.reasons = active.map((e) => ({
         metric: e.metric, source: e.source, value: e.latest_value,
@@ -163,10 +184,14 @@ class AlertEngine {
   }
 
   getLists() {
+    const muted = this.muted || new Set()
     const active = []
     const resolved = []
     for (const e of this.entries.values()) {
-      if (e.state === 'pending') continue // pending is exposed via host.status.pending only
+      if (e.state === 'pending') continue
+      // Hidden from banner / list / sound while the node is muted; the state
+      // machine itself kept running untouched, so unmuting shows the truth.
+      if (muted.has(e.host_id) && e.metric !== 'offline') continue
       const a = {
         id: e.id, host_id: e.host_id, hostname: e.hostname,
         metric: e.metric, source: e.source, level: e.level, state: e.state,

@@ -47,11 +47,19 @@ export function evaluateHost(host) {
 
   if (!host.online) {
     const offlineSec = Math.round((Date.now() - host.lastSeen) / 1000);
-    reasons.push({
-      metric: 'offline', source: 'heartbeat', value: offlineSec,
-      threshold: thresholds.offline_seconds, level: 'OFFLINE',
-    });
-    return { level: 'OFFLINE', components, reasons };
+    // S1 §3.2: an ephemeral node leaving the fleet is a *presence* fact, not an
+    // incident. Same OFFLINE level (grey card), but no reason => nothing ever
+    // enters the alert engine, banner or sound, and evaluateCluster ignores it.
+    const absent = host.presence_class === 'ephemeral';
+    return {
+      level: 'OFFLINE',
+      absent,
+      components,
+      reasons: absent ? [] : [{
+        metric: 'offline', source: 'heartbeat', value: offlineSec,
+        threshold: thresholds.offline_seconds, level: 'OFFLINE',
+      }],
+    };
   }
 
   const m = host.metrics;
@@ -137,17 +145,31 @@ function peak(nums) {
   return valid.length ? Math.round(Math.max(...valid)) : null;
 }
 
+/**
+ * Cluster roll-up (S1 §3.1). Health and the online ratio are computed over
+ * **persistent** nodes only - that is the fix for a transient or borrowed
+ * machine pinning the banner grey. Ephemeral nodes are reported as presence,
+ * and aggregate load stays physical (any machine online right now really is
+ * carrying load).
+ */
 export function evaluateCluster(hosts) {
+  const classOf = (h) => h.presence_class || 'persistent';
+  const persistent = hosts.filter((h) => classOf(h) === 'persistent');
+  const ephemeral = hosts.filter((h) => classOf(h) === 'ephemeral');
+
   const online = hosts.filter((h) => h.online);
   const gpusOf = (h) => (h.metrics?.gpu || []);
 
   const linkLevels = online.map((h) => h.status?.components?.link?.level)
     .filter((l) => l && l !== 'OK');
 
+  const epOnline = ephemeral.filter((h) => h.online);
+
   return {
-    health: worstLevel(...hosts.map((h) => h.status?.level)) || 'OK',
-    online: online.length,
-    total: hosts.length,
+    health: worstLevel(...persistent.map((h) => h.status?.level)) || 'OK',
+    online: persistent.filter((h) => h.online).length,
+    total: persistent.length,
+    presence: { online: epOnline.length, total: ephemeral.length },
     link: {
       worst_level: worstLevel(...linkLevels) || null,
       degraded_count: linkLevels.length,
