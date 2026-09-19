@@ -109,7 +109,9 @@ app.use(express.json());
 
 app.get('/api/hosts', (req, res) => {
   const hosts = store.getAnnotatedHosts();
-  res.json({ hosts, cluster: evaluateCluster(hosts) });
+  // admin travels here too so the very first paint already knows whether writes
+  // are possible; without it every card menu flashes locked for one WS frame.
+  res.json({ hosts, cluster: evaluateCluster(hosts), admin: { passphrase_set: roster.hasPassphrase() } });
 });
 
 app.get('/api/alerts', (req, res) => {

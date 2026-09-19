@@ -23,15 +23,60 @@ export function hostLevel(host) {
   return host.status?.level || (host.online ? 'OK' : 'OFFLINE')
 }
 
+/* ---------- S1 roster presentation (never a fifth alert level) ----------
+   ABSENT is a display state for "an ephemeral node that left". It must not
+   enter LEVEL_RANK: ranking it would let a borrowed machine keep dragging the
+   whole fleet's attention, which is exactly the defect S1 removes. */
+
+export const CLASS_LABELS = { persistent: '常驻', ephemeral: '临时', retired: '已退役' }
+
+export const CLASS_HINT = {
+  persistent: '失联会报警，计入在线率与集群健康',
+  ephemeral: '离场只标记不报警，且不进在线率分母',
+  retired: '已从看板与全部分母移除，历史仍可查',
+}
+
+export function displayName(host) {
+  return host?.display_name || host?.hostname || host?.host_id || '?'
+}
+
+export function isAbsent(host) {
+  return !host.online && host.status?.absent === true
+}
+
+/* How an alert ended. The server distinguishes a real recovery from "you
+   stopped caring about this node" and from "we stopped hearing about it"
+   (S1b) - printing 已恢复 for either would claim a down machine came back. */
+export function resolvedText(a) {
+  const by = a?.cancelled || (a?.state === 'cancelled' ? 'reclassified' : null)
+  if (by === 'retired') return '已退役·告警关闭'
+  if (by === 'reclassified') return '已改判临时·不再报警'
+  if (by === 'stale') return '已失效·节点长期未上报'
+  return '已恢复'
+}
+
+export function formatSeenLast(ts) {
+  if (!ts) return '时间未知'
+  const d = new Date(ts)
+  const pad = (n) => String(n).padStart(2, '0')
+  const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`
+  const today = new Date().toDateString() === d.toDateString()
+  return today ? hm : `${d.getMonth() + 1}-${d.getDate()} ${hm}`
+}
+
 export function sortHostsForOverview(hosts) {
   return [...hosts].sort((a, b) => {
+    // Absent-first-out: a node that merely left is not an incident, so it must
+    // not sit at the top of the grid on the strength of its grey OFFLINE rank.
+    const aa = isAbsent(a), ab = isAbsent(b)
+    if (aa !== ab) return aa ? 1 : -1
     const la = hostLevel(a)
     const lb = hostLevel(b)
     if (LEVEL_RANK[lb] !== LEVEL_RANK[la]) return LEVEL_RANK[lb] - LEVEL_RANK[la]
     const wa = ROLE_WEIGHTS[a.role] ?? ROLE_WEIGHTS.other
     const wb = ROLE_WEIGHTS[b.role] ?? ROLE_WEIGHTS.other
     if (wa !== wb) return wa - wb
-    return (a.hostname || a.host_id).localeCompare(b.hostname || b.host_id)
+    return displayName(a).localeCompare(displayName(b))
   })
 }
 

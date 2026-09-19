@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref, onUnmounted } from 'vue'
-import { LEVEL_RANK, STATUS_TEXT, formatReason } from '../lib/status.js'
+import { LEVEL_RANK, STATUS_TEXT, formatReason, displayName, resolvedText } from '../lib/status.js'
 
 /* P2: driven by the debounced alert engine (active + resolved window),
    no longer by instantaneous reasons. */
@@ -40,7 +40,7 @@ function metricText(a) {
            :class="a.level.toLowerCase()" @click="emit('open', a.host_id)">
         <span class="ap-dot" />
         <div class="ap-body">
-          <div class="ap-name">{{ a.hostname }}
+          <div class="ap-name">{{ displayName(a) }}
             <em>{{ STATUS_TEXT[a.level] }}</em>
             <span class="ap-dur">{{ duration(a) }}</span>
           </div>
@@ -50,12 +50,12 @@ function metricText(a) {
     </div>
 
     <details v-if="resolved.length" class="ap-resolved">
-      <summary>最近恢复 ({{ resolved.length }})</summary>
+      <summary>最近恢复 / 关闭 ({{ resolved.length }})</summary>
       <div class="ap-item done" v-for="a in resolved" :key="a.id"
            :class="a.level.toLowerCase()">
         <span class="ap-dot" />
         <div class="ap-body">
-          <div class="ap-name">{{ a.hostname }} <em>已恢复 · {{ duration(a) }}</em></div>
+          <div class="ap-name">{{ displayName(a) }} <em>{{ resolvedText(a) }} · {{ duration(a) }}</em></div>
           <div class="ap-reason">{{ metricText(a) }}</div>
         </div>
       </div>

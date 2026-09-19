@@ -1,6 +1,9 @@
 <script setup>
 import { computed } from 'vue'
-import { ROLE_LABELS, formatUptime, formatReason } from '../lib/status.js'
+import {
+  ROLE_LABELS, formatUptime, formatReason, resolvedText,
+  displayName, isAbsent, formatSeenLast, CLASS_LABELS, CLASS_HINT,
+} from '../lib/status.js'
 
 /* V2 right column: 2D numeric HUD panel (P4 two-layer rework).
    Rows are clickable -> parent opens the matching V3 drawer.
@@ -14,6 +17,9 @@ const emit = defineEmits(['drawer'])
 
 const m = computed(() => props.host.metrics || {})
 const comp = computed(() => props.host.status?.components || {})
+const absent = computed(() => isAbsent(props.host))
+const nodeClass = computed(() => props.host.presence_class || 'persistent')
+const mutedUntil = computed(() => Number(props.host.muted_until) || null)
 
 function cls(level) {
   return level ? level.toLowerCase() : 'none'
@@ -93,8 +99,10 @@ const uptimeText = computed(() => {
 <template>
   <aside class="hud-panel">
     <div class="hud-head">
-      <span>{{ host.hostname || host.host_id }}</span>
+      <span :title="'host_id: ' + host.host_id">{{ displayName(host) }}</span>
       <em class="hud-role">{{ ROLE_LABELS[host.role] || host.role }}</em>
+      <em class="hud-class" :class="nodeClass" :title="CLASS_HINT[nodeClass]">{{ CLASS_LABELS[nodeClass] }}</em>
+      <em class="hud-muted" v-if="mutedUntil" :title="'静默至 ' + formatSeenLast(mutedUntil)">🔕</em>
       <span class="hud-up" v-if="uptimeText">开机 {{ uptimeText }}</span>
     </div>
 
@@ -138,11 +146,15 @@ const uptimeText = computed(() => {
           <span>{{ a.level === 'OFFLINE' ? '失联' : '' }}{{ formatReason({ ...a, value: a.latest_value }) }}</span>
         </div>
         <div class="hud-alert done" v-for="a in myAlerts.resolved" :key="a.id">
-          <i class="dot ok" /><span>已恢复 {{ formatReason({ ...a, value: a.latest_value }) }}</span>
+          <i class="dot" :class="a.cancelled ? 'none' : 'ok'" /><span>{{ resolvedText(a) }} {{ formatReason({ ...a, value: a.latest_value }) }}</span>
         </div>
       </template>
     </template>
 
+    <div v-else-if="absent" class="hud-absent">
+      该临时节点已离场 · 上次在场 {{ formatSeenLast(host.last_seen) }}
+      <em>不报警、不计入在线率</em>
+    </div>
     <div v-else class="hud-offline">
       节点失联{{ host.lastSeen ? ' · 最后上报 ' + new Date(host.lastSeen).toLocaleTimeString() : '' }}
     </div>
@@ -177,4 +189,12 @@ const uptimeText = computed(() => {
 .hud-alert.warn { color: #9a6700; }
 .hud-alert.done { opacity: .65; }
 .hud-offline { font-size: 12px; color: var(--text2); padding: 16px 0; }
+.hud-absent { font-size: 12px; color: var(--text2); padding: 16px 0; line-height: 1.6; }
+.hud-absent em { display: block; font-style: normal; font-size: 11px; color: var(--text3); }
+.hud-class {
+  font-style: normal; font-size: 10px; border-radius: 8px; padding: 0 6px;
+  color: #1a7f37; background: rgba(30,140,50,.10);
+}
+.hud-class.ephemeral { color: var(--text2); background: rgba(0,0,0,.05); border: 1px dashed var(--border); }
+.hud-muted { font-style: normal; font-size: 11px; }
 </style>

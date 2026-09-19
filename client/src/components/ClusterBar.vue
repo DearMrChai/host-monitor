@@ -2,13 +2,15 @@
 import { computed } from 'vue'
 import { STATUS_TEXT } from '../lib/status.js'
 import { sound, toggleMute, unlock } from '../lib/sound.js'
+import { admin, openDialog } from '../lib/admin.js'
 
 const props = defineProps({
   cluster: { type: Object, default: null },
   connected: { type: Boolean, default: false },
   view: { type: String, default: 'overview' },
+  pendingCount: { type: Number, default: 0 },
 })
-defineEmits(['toggle'])
+defineEmits(['toggle', 'goto-pending'])
 
 function onBell() {
   unlock()
@@ -18,6 +20,18 @@ function onBell() {
 
 const health = computed(() => props.cluster?.health || 'OFFLINE')
 const healthClass = computed(() => health.value.toLowerCase())
+
+/* S1b: the denominator is now persistent nodes only. total===0 means "no node
+   is trusted to be here" — reporting 正常 for that would be a lie, and it is
+   also the state you reach by retiring everything by accident. */
+const empty = computed(() => !!props.cluster && props.cluster.total === 0)
+const onlineText = computed(() =>
+  (!props.cluster || empty.value ? '—' : `${props.cluster.online}/${props.cluster.total}`))
+const presence = computed(() => props.cluster?.presence || null)
+
+function onKey() {
+  openDialog(admin.passphraseSet ? '更换管理口令' : '设置管理口令后才能操作节点')
+}
 
 const bars = computed(() => {
   const agg = props.cluster?.aggregate
@@ -35,11 +49,26 @@ const bars = computed(() => {
     <div class="cb-left">
       <span class="conn-dot" :class="{ ok: connected }" />
       <span class="cb-title">Host Monitor</span>
-      <span class="health-pill" :class="healthClass">
-        <i class="hp-dot" /> 集群{{ STATUS_TEXT[health] }}
+      <span class="health-pill" :class="empty ? 'offline' : healthClass">
+        <i class="hp-dot" /> {{ empty ? '无常驻节点' : '集群' + STATUS_TEXT[health] }}
       </span>
-      <span class="cb-online" v-if="cluster">
-        在线 <b>{{ cluster.online }}</b>/{{ cluster.total }}
+      <span class="cb-online" v-if="cluster"
+            :title="empty ? '所有节点都被归为临时/退役，健康度与在线率没有可统计的常驻机' : '仅统计常驻节点'">
+        在线 <b>{{ onlineText }}</b>
+      </span>
+      <span class="cb-presence" v-if="presence && presence.online"
+            :title="`临时节点在场 ${presence.online}/${presence.total}：不报警、不计入在线率`">
+        · 在场 {{ presence.online }}
+      </span>
+      <!-- Silence must be visible at the top line too, or a muted fleet just
+           looks healthy (S1 §3.3 honesty limit). -->
+      <span class="cb-muted" v-if="cluster?.muted_count"
+            :title="cluster.muted_count + ' 个节点的阈值告警处于静默中（失联不受静默影响）'">
+        🔕 {{ cluster.muted_count }}
+      </span>
+      <span class="pending-badge" v-if="pendingCount" @click="$emit('goto-pending')"
+            :title="'名册里有 ' + pendingCount + ' 个节点还没确认归类'">
+        待确认 {{ pendingCount }}
       </span>
       <span class="link-degraded" :class="cluster?.link?.worst_level?.toLowerCase()"
             v-if="cluster?.link?.worst_level"
@@ -69,6 +98,9 @@ const bars = computed(() => {
       <span v-if="!sound.unlocked" class="unlock-hint" @click="onBell">点击激活声音</span>
       <button class="bell" :class="{ muted: sound.muted }" :title="sound.muted ? '取消静音' : '静音'"
               @click="onBell">{{ sound.muted ? '🔇' : '🔊' }}</button>
+      <button class="key" :class="{ unset: !admin.passphraseSet }"
+              :title="admin.passphraseSet ? '管理口令：更换' : '设置管理口令（否则无法操作节点）'"
+              @click="onKey">🔑</button>
     </div>
   </header>
 </template>
@@ -101,6 +133,12 @@ const bars = computed(() => {
 .health-pill.offline .hp-dot { background: var(--text3); }
 
 .cb-online { font-size: 12px; color: var(--text2); }
+.cb-presence { font-size: 11px; color: var(--text3); }
+.cb-muted { font-size: 11px; color: #9a6700; }
+.pending-badge {
+  font-size: 11px; padding: 2px 9px; border-radius: 10px; cursor: pointer;
+  border: 1px solid var(--accent); color: var(--accent); background: rgba(9,105,218,.08);
+}
 .link-degraded {
   font-size: 11px; padding: 2px 9px; border-radius: 10px;
   border: 1px solid var(--orange); color: #9a6700; background: rgba(210,153,34,.10);
@@ -131,4 +169,10 @@ const bars = computed(() => {
   border-radius: 14px; font-size: 13px; padding: 3px 9px; cursor: pointer;
 }
 .bell.muted { opacity: .55; }
+.key {
+  border: 1px solid var(--border); background: var(--bg-glass);
+  border-radius: 14px; font-size: 13px; padding: 3px 9px; cursor: pointer;
+}
+/* No passphrase yet = no write actions available anywhere, so say so. */
+.key.unset { border-color: var(--orange); border-style: dashed; }
 </style>

@@ -4,7 +4,7 @@ import { TopologyRenderer } from '../three/TopologyRenderer.js'
 import HudPanel from '../components/HudPanel.vue'
 import DrawerV3 from '../components/DrawerV3.vue'
 import defaultTopology from '../config/sample-topology.json'
-import { STATUS_TEXT, ROLE_LABELS } from '../lib/status.js'
+import { STATUS_TEXT, ROLE_LABELS, displayName, isAbsent, formatSeenLast, CLASS_LABELS } from '../lib/status.js'
 
 /* V2 node detail, two-layer (P4):
    left = 3D shell (colors/blinks locate the alarm source, click -> V3 drawer)
@@ -112,6 +112,10 @@ const alarmMap = computed(() => {
 const nodeLevel = computed(() => props.host?.status?.level ||
   (props.host?.online ? 'OK' : 'OFFLINE'))
 
+/* S1b: same grey, right word — a temporary node that left is 离场, not 失联. */
+const absent = computed(() => isAbsent(props.host || {}))
+const levelText = computed(() => (absent.value ? '离场' : STATUS_TEXT[nodeLevel.value]))
+
 function sync3D(host) {
   if (!renderer || !host?.metrics || !host.online) return
   renderer.updateMetrics(host.metrics, alarmMap.value)
@@ -119,7 +123,7 @@ function sync3D(host) {
 
 watch(() => props.host, (host) => {
   if (!host) return
-  hostName.value = host.hostname || host.host_id
+  hostName.value = displayName(host)
   const newTopo = buildTopologyFromMetrics(host)
   const topoChanged = JSON.stringify(newTopo) !== JSON.stringify(topology.value)
   if (!renderer || topoChanged) {
@@ -131,7 +135,7 @@ watch(() => props.host, (host) => {
 
 onMounted(() => {
   if (props.host) {
-    hostName.value = props.host.hostname || props.host.host_id
+    hostName.value = displayName(props.host)
     topology.value = buildTopologyFromMetrics(props.host)
   }
   buildScene(topology.value)
@@ -157,8 +161,10 @@ onBeforeUnmount(() => {
             <span class="tb-title">Host Monitor</span>
             <span class="tb-host" v-if="hostName">{{ hostName }}</span>
             <span class="tb-role" v-if="host?.role">{{ ROLE_LABELS[host.role] || host.role }}</span>
+            <span class="tb-class" :class="host?.presence_class || 'persistent'"
+                  v-if="host">{{ CLASS_LABELS[host.presence_class] || CLASS_LABELS.persistent }}</span>
             <span class="tb-nodelevel" :class="nodeLevel.toLowerCase()">
-              {{ STATUS_TEXT[nodeLevel] }}
+              {{ levelText }}
             </span>
           </div>
           <div class="tb-right">
@@ -170,8 +176,12 @@ onBeforeUnmount(() => {
         </header>
 
         <div v-if="!host" class="error-overlay">
-          <p>节点已丢失</p>
-          <p class="hint">该节点不在当前集群列表中</p>
+          <p>节点暂不可见</p>
+          <p class="hint">它不在 Server 当前的主机列表里（可能已被退役，或 Server 重启后 Agent 尚未重连）<br>
+            告警按最后已知状态保留，不会因此被判成"已恢复"</p>
+        </div>
+        <div v-else-if="absent" class="offline-note">
+          临时节点已离场 · 上次在场 {{ formatSeenLast(host.last_seen) }}（不报警、不计入在线率）
         </div>
         <div v-else-if="!host.online" class="offline-note">
           节点失联{{ host.lastSeen ? ' · 最后上报 ' + new Date(host.lastSeen).toLocaleTimeString() : '' }}
@@ -212,6 +222,14 @@ onBeforeUnmount(() => {
 .tb-role {
   font-size: 10px; color: var(--text2); border: 1px solid var(--border);
   border-radius: 8px; padding: 0 6px; background: var(--bg-glass); pointer-events: auto;
+}
+/* Class is never implicit (S1 design §9): 常驻/临时 must be readable here too. */
+.tb-class {
+  font-size: 10px; border-radius: 8px; padding: 0 6px; pointer-events: auto;
+  color: #1a7f37; background: rgba(30,140,50,.10);
+}
+.tb-class.ephemeral {
+  color: var(--text2); background: rgba(0,0,0,.05); border: 1px dashed var(--border);
 }
 .tb-nodelevel {
   font-size: 11px; font-weight: 700; padding: 2px 10px; border-radius: 12px;

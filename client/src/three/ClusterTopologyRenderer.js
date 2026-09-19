@@ -15,6 +15,9 @@ import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRe
 
 const LC = { OK: 0x3fb950, WARN: 0xd29922, CRIT: 0xf85149, OFFLINE: 0x9aa0a6 }
 const GRAY = 0xbdb5a6
+/* Presentation-only: an ephemeral node that left. Lighter than OFFLINE because
+   it carries no alarm (S1 §3.2 — deliberately not a fifth status level). */
+const ABSENT = 0xd8d2c6
 
 const HUB_POS = new THREE.Vector3(0, 1.1, 0)
 const GW_POS = new THREE.Vector3(3.4, 0.6, 0)
@@ -136,7 +139,7 @@ export class ClusterTopologyRenderer {
   /* ---------- data update ---------- */
 
   /**
-   * nodes: [{ id, name, deviceLevel, linkLevel, online,
+   * nodes: [{ id, name, deviceLevel, linkLevel, online, absent,
    *           links: [{ key, name, rtt, loss, level }] }]
    */
   update(nodes) {
@@ -158,11 +161,16 @@ export class ClusterTopologyRenderer {
       }
       rec.group.position.copy(pos)
       rec.pos = pos
-      const devColor = n.online ? (LC[n.deviceLevel] ?? LC.OK) : LC.OFFLINE
+      /* S1b ABSENT: a temporary node that left is not an incident, so it must
+         not wear the same grey as a lost persistent node. Lighter + shrunk is
+         readable without adding a fifth status colour. */
+      rec.group.scale.setScalar(n.absent ? 0.72 : 1)
+      const devColor = n.absent ? ABSENT : n.online ? (LC[n.deviceLevel] ?? LC.OK) : LC.OFFLINE
       rec.bodyMat.color.setHex(devColor)
       rec.baseMat.color.setHex(n.linkLevel ? (LC[n.linkLevel] ?? GRAY) : GRAY)
       const serverLink = n.links.find(l => l.key === 'server')
-      const rttTxt = !n.online ? '失联'
+      const rttTxt = n.absent ? '离场（临时节点，不报警）'
+        : !n.online ? '失联'
         : serverLink ? (serverLink.rtt != null ? `↘${serverLink.rtt}ms 丢${serverLink.loss}%` : `↘— 丢${serverLink.loss}%`)
         : '链路无数据'
       rec.labelEl.querySelector('.tl-name').textContent = n.name

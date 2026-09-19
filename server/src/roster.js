@@ -280,6 +280,17 @@ class Roster {
 
   isMuted(hostId, now = Date.now()) { return this.mutedUntil(hostId, now) !== null }
 
+  /**
+   * Every currently-muted host id, straight from the roster. The alert engine
+   * needs this instead of filtering the live host list: a muted node that has
+   * not reconnected yet (Server restart, Agent blip) is simply not in the
+   * store, and treating "not in the store" as "not muted" would let its frozen
+   * alert age out into a fake 已恢复.
+   */
+  mutedIds(now = Date.now()) {
+    return [...this.cache.keys()].filter((id) => this.isMuted(id, now))
+  }
+
   setDisplay(hostId, name) {
     const node = this.cache.get(hostId)
     if (!node) return { ok: false, error: 'no such node' }

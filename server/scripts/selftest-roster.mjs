@@ -144,6 +144,25 @@ ok('B5 只剩临时机离场时健康度为 OK（V1“永远灰”缺陷已修�
 ok('B6 聚合负载仍含在线临时机（物理事实不因归类而失真）',
   cl.aggregate.cpu.avg === 99, JSON.stringify(cl.aggregate.cpu))
 
+/* B7/B8 (S1b): 🔕 must reach the fleet-level signal, otherwise silencing a
+   machine does not silence anything the user actually looks at. Availability is
+   the one thing it may never swallow. */
+const mutedHot = withStatus(hot('p3', 'persistent'))
+mutedHot.status.muted = true
+const calm = withStatus(mk('p4', 'persistent', true,
+  { cpu: { usage_percent: 5, temperature_c: null }, memory: { percent: 10 }, disk: { partitions: [] } }))
+const clMuted = evaluateCluster([mutedHot, calm])
+ok('B7 满载但已静默的常驻机不进集群健康度，且以 muted_count 可见',
+  clMuted.health === 'OK' && clMuted.muted_count === 1 && clMuted.total === 2
+  // Silencing an alert never erases the electricity: the load average still
+  // includes it (99+5)/2 = 52, per B6.
+  && clMuted.aggregate.cpu.avg === 52,
+  JSON.stringify({ health: clMuted.health, muted: clMuted.muted_count, cpu: clMuted.aggregate.cpu.avg }))
+const mutedOff = withStatus(mk('p5', 'persistent', false))
+mutedOff.status.muted = true
+ok('B8 静默不吞失联：被静默的失联常驻机仍是 OFFLINE',
+  evaluateCluster([mutedOff]).health === 'OFFLINE')
+
 // ---------- C. alert engine: debounce + mute (advance() directly, no sleeping) --
 {
   const E = alertEngine.constructor
@@ -187,6 +206,89 @@ ok('B6 聚合负载仍含在线临时机（物理事实不因归类而失真）'
   e2.advance([mkHost(5)], t0 + 300_000)
   ok('C5 解除静默后同一条告警重新可见（值回到真实的高位）',
     e2.getLists().active.some((a) => a.id === 'p9|cpu_usage|cpu'))
+
+  /* C6/C7 (S1b): reclassifying or retiring a node is not a recovery. V1 would
+     age the vanished reason into "已恢复" and tell the user a dead machine came
+     back; the engine must close it as cancelled instead. */
+  const e3 = new E()
+  e3.advance([withStatus(mk('p9', 'persistent', false))], t0 + 400_000)
+  const offWasActive = e3.getLists().active.some((a) => a.metric === 'offline')
+  roster.setClass('p9', 'ephemeral')
+  e3.advance([withStatus(mk('p9', 'ephemeral', false))], t0 + 402_000)
+  const reclassified = e3.entries.get('p9|offline|heartbeat')
+  ok('C6 改判临时：离线告警以 cancelled=reclassified 关闭，不伪装成恢复',
+    offWasActive && reclassified?.state === 'resolved'
+    && reclassified?.cancelled === 'reclassified',
+    JSON.stringify(reclassified && { st: reclassified.state, by: reclassified.cancelled }))
+  ok('C6b 前端能从 resolved 列表里拿到 cancelled 字段',
+    e3.getLists().resolved.some((a) => a.id === 'p9|offline|heartbeat'
+      && a.cancelled === 'reclassified'))
+
+  const e4 = new E()
+  for (let i = 0; i < 3; i++) e4.advance([mkHost()], t0 + 500_000 + i * 2_000)
+  roster.setClass('p9', 'retired')
+  e4.advance([], t0 + 600_000) // retired nodes are filtered out of the host list
+  const retired = e4.entries.get('p9|cpu_usage|cpu')
+  ok('C7 退役节点的活动告警以 cancelled=retired 关闭',
+    retired?.state === 'resolved' && retired?.cancelled === 'retired'
+    && e4.getLists().active.length === 0,
+    JSON.stringify(retired && { st: retired.state, by: retired.cancelled }))
+  roster.setClass('p9', 'persistent')
+
+  /* C8 (S1b defect 8): the mute set must come from the roster, not from the
+     live host list. After a Server restart the Agent has not reconnected yet,
+     so advance() runs with hosts=[] - a frozen alert used to age out there and
+     turn into a fake 已恢复 for a machine the user explicitly silenced. */
+  const e5 = new E()
+  for (let i = 0; i < 3; i++) e5.advance([mkHost()], t0 + 700_000 + i * 2_000)
+  const e5Active = e5.entries.get('p9|cpu_usage|cpu')
+  const wasActive = e5Active?.state === 'active'
+  roster.setMute('p9', Date.now() + 3_600_000)
+  for (let i = 0; i < 4; i++) e5.advance([], t0 + 800_000 + i * 2_000)
+  ok('C8 静默态源于 roster：重启后主机表为空，冻结的告警不会伪装成已恢复',
+    wasActive && e5Active.state === 'active' && e5Active.cancelled === undefined
+    && e5.getLists().active.length === 0,
+    JSON.stringify({ wasActive, st: e5Active?.state, by: e5Active?.cancelled }))
+  roster.setMute('p9', null)
+  e5.advance([mkHost()], t0 + 900_000)
+  ok('C8b 重启期间静默未丢：解除后同一条告警原样回来',
+    e5.getLists().active.some((a) => a.id === 'p9|cpu_usage|cpu' && a.state === 'active'),
+    JSON.stringify(e5.getLists().active.map((a) => `${a.host_id}/${a.metric}`)))
+
+  /* C9 (S1b defect 9): the same lie without any muting. restoreActive() puts
+     yesterday's alerts back while the store is still empty, so a host the
+     Server has never heard from in this process must not "recover" - and a node
+     that never returns at all must not pin the banner forever either. */
+  const e6 = new E()
+  for (let i = 0; i < 3; i++) e6.advance([mkHost()], t0 + 1_000_000 + i * 2_000)
+  const e6cpu = e6.entries.get('p9|cpu_usage|cpu')
+  const e6WasActive = e6cpu?.state === 'active'
+  for (let i = 0; i < 4; i++) e6.advance([], t0 + 1_100_000 + i * 2_000)
+  ok('C9 主机完全未知时不判恢复：告警保持活动（重启窗口）',
+    e6WasActive && e6cpu.state === 'active' && !e6cpu.cancelled,
+    JSON.stringify({ was: e6WasActive, st: e6cpu?.state, by: e6cpu?.cancelled }))
+  e6.advance([], t0 + 1_100_000 + 45 * 60_000) // past the grace window
+  ok('C9b 长期未上报以 cancelled=stale 关闭，不写“已恢复”',
+    e6cpu.state === 'resolved' && e6cpu.cancelled === 'stale',
+    JSON.stringify({ st: e6cpu.state, by: e6cpu.cancelled }))
+  // The grace must restart from the last time the host went unknown, not from
+  // the very first blip: reporting again clears the clock.
+  const e7 = new E()
+  for (let i = 0; i < 3; i++) e7.advance([mkHost()], t0 + 2_000_000 + i * 2_000)
+  const e7cpu = e7.entries.get('p9|cpu_usage|cpu')
+  e7.advance([], t0 + 2_100_000)               // a first, brief unknown window
+  e7.advance([mkHost()], t0 + 2_200_000)       // Agent is back and still alarming
+  e7.advance([], t0 + 2_100_000 + 45 * 60_000) // dark again 45 min later
+  ok('C9c 恢复上报会重置未上报计时，不会因早先的短暂缺席被误判失效',
+    e7cpu.state === 'active' && !e7cpu.cancelled,
+    JSON.stringify({ st: e7cpu.state, by: e7cpu.cancelled }))
+
+  /* Section C persisted lifecycle rows for p9 into the shared history DB, and
+     its last write left an *active* cpu alert. Section E boots a real Server on
+     that same DB, which would then legitimately restore and freeze an alert for
+     a host that never connects - correct behaviour, but noise for E's lists.
+     Start E from a clean alert table. */
+  history.db.prepare("DELETE FROM alert_events WHERE host_id = 'p9'").run()
 }
 
 // ---------- D. passphrase: default deny, scrypt only ----------
@@ -278,7 +380,7 @@ await withServer(async () => {
   const l1 = s0.hosts.find((h) => h.host_id === 'live-1')
   ok('E1 Agent 注册即入册，快照带上名册字段',
     !!l1 && l1.presence_class === 'persistent' && l1.confirmed === false
-    && l1.display_name === 'LiveBox',
+    && l1.display_name === 'LiveBox' && l1.last_seen > 0,
     JSON.stringify(l1 && { cls: l1.presence_class, name: l1.display_name }))
   ok('E2 新节点出现在待确认引导列表', s0.new_nodes.includes('live-1'),
     `new_nodes=${s0.new_nodes.length}`)
@@ -312,6 +414,11 @@ await withServer(async () => {
     && ep?.status.absent === true && ep?.status.level === 'OFFLINE'
     && alerts.includes('live-1/offline') && !alerts.some((x) => x.startsWith('live-2')),
     JSON.stringify({ health: s1.cluster.health, alerts }))
+  const offAlert = s1.alerts.active.find((x) => x.host_id === 'live-1')
+  const epRow = s1.hosts.find((h) => h.host_id === 'live-2')
+  ok('E5b 告警条目带名册显示名，缺席卡片带可持久化的上次在场时间',
+    offAlert?.display_name === '我的游戏本' && epRow?.last_seen > 0,
+    JSON.stringify({ dn: offAlert?.display_name, ls: epRow?.last_seen ? 'yes' : 'no' }))
 
   const muted = await post('/api/roster/live-1/mute', { hours: 1 }, 'another')
   const s2 = await snapshot()
@@ -341,6 +448,20 @@ await withServer(async () => {
   const s = await snapshot()
   ok('E9 重启不伪造在线：无 Agent 连接时分母为空、健康度 OK',
     s.hosts.length === 0 && s.cluster.health === 'OK', `hosts=${s.hosts.length}`)
+
+  /* E11 (S1b defect 9, end to end): live-1's OFFLINE alert was still active
+     when the first Server process was killed. restoreActive() puts it back, but
+     with no Agent connected the store is empty - V1 aged it out on the first
+     tick and printed 已恢复 for a machine that was still down, dropping it from
+     the banner until the Agent happened to reconnect. */
+  await new Promise((r) => setTimeout(r, 7_000)) // several ticks, still no Agent
+  const sFrozen = await snapshot()
+  const offRow = sFrozen.alerts.active.find((x) => x.host_id === 'live-1' && x.metric === 'offline')
+  ok('E11 重启且无人上报时，离线告警冻结保持活动而不是伪恢复',
+    !!offRow && offRow.state === 'active' && !offRow.cancelled
+    && !sFrozen.alerts.resolved.some((x) => x.host_id === 'live-1' && x.metric === 'offline'),
+    JSON.stringify({ act: sFrozen.alerts.active.map((x) => `${x.host_id}/${x.metric}`),
+                     res: sFrozen.alerts.resolved.map((x) => `${x.host_id}/${x.metric}`) }))
 
   const c = await connectAgent('live-1', 'LAPTOP-RENAMED-BY-OS')
   const row = (await snapshot()).hosts.find((h) => h.host_id === 'live-1')

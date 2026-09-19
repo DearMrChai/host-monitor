@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
-import { METRIC_LABELS } from '../lib/status.js'
+import { METRIC_LABELS, displayName } from '../lib/status.js'
 
 /* CRIT/OFFLINE banner (P2). WARN never enters it. Dismissible to a small
    chip; auto re-expands when the critical set changes. */
@@ -18,7 +18,7 @@ watch(() => crits.value.map(a => a.id + a.level).join('|'), (v) => {
 
 const summary = computed(() => crits.value.slice(0, 2).map(a => {
   const label = METRIC_LABELS[a.metric] || a.metric
-  return `${a.hostname} ${label} ${a.latest_value}${a.metric === 'offline' ? 's' : '%'}`
+  return `${displayName(a)} ${label} ${a.latest_value}${a.metric === 'offline' ? 's' : '%'}`
 }).join(' · '))
 
 const more = computed(() => Math.max(0, crits.value.length - 2))

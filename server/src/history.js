@@ -68,10 +68,19 @@ class History {
       CREATE TABLE IF NOT EXISTS alert_events (
         id TEXT PRIMARY KEY, host_id TEXT, hostname TEXT, metric TEXT, source TEXT,
         level TEXT, state TEXT, value_at_trigger REAL, latest_value REAL,
-        threshold REAL, started_at INTEGER, resolved_at INTEGER
+        threshold REAL, started_at INTEGER, resolved_at INTEGER, cancelled TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_alert_time ON alert_events(started_at);
     `)
+    /* S1b: `cancelled` records WHY an alert stopped (reclassified | retired |
+       stale) so the durable log can tell "it got better" apart from "you
+       stopped caring". DBs from before S1b have no such column and node:sqlite
+       has no migration runner, so patch it in place - ADD COLUMN is
+       non-destructive and cheap. */
+    const alertCols = this.db.prepare('PRAGMA table_info(alert_events)').all().map((c) => c.name)
+    if (!alertCols.includes('cancelled')) {
+      this.db.exec('ALTER TABLE alert_events ADD COLUMN cancelled TEXT')
+    }
 
     const ph = NUM_COLS.map(() => '?').join(', ')
     const insertSql = (tbl) =>
@@ -80,12 +89,12 @@ class History {
     this.insert1m = this.db.prepare(insertSql('samples_1m'))
     this.upsertAlert = this.db.prepare(`
       INSERT INTO alert_events (id, host_id, hostname, metric, source, level, state,
-        value_at_trigger, latest_value, threshold, started_at, resolved_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+        value_at_trigger, latest_value, threshold, started_at, resolved_at, cancelled)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(id) DO UPDATE SET
         hostname=excluded.hostname, level=excluded.level, state=excluded.state,
         latest_value=excluded.latest_value, started_at=excluded.started_at,
-        resolved_at=excluded.resolved_at
+        resolved_at=excluded.resolved_at, cancelled=excluded.cancelled
     `)
 
     this.lastSampleAt = new Map()
@@ -134,10 +143,14 @@ class History {
   /** Upsert one alert lifecycle entry (called by alerts.js). */
   recordAlert(e) {
     if (!this.enabled) return
+    // S1b: an alert closed by reclassifying/retiring the node - or by its host
+    // going dark for good - is stored as state 'cancelled' plus the reason in
+    // `cancelled`, so the durable log never claims a machine recovered.
     this.upsertAlert.run(
-      e.id, e.host_id, e.hostname, e.metric, e.source, e.level, e.state,
+      e.id, e.host_id, e.hostname, e.metric, e.source, e.level,
+      e.cancelled ? 'cancelled' : e.state,
       e.value_at_trigger ?? null, e.latest_value ?? null, e.threshold ?? null,
-      e.started_at ?? null, e.resolved_at ?? null,
+      e.started_at ?? null, e.resolved_at ?? null, e.cancelled ?? null,
     )
   }
 
@@ -206,8 +219,10 @@ class History {
     const aggCut = now - this.cfg.agg_retention_days * 86_400_000
     const d1 = this.db.prepare('DELETE FROM samples_raw WHERE ts < ?').run(rawCut)
     const d2 = this.db.prepare('DELETE FROM samples_1m WHERE ts < ?').run(aggCut)
+    // Closed alerts are transient bookkeeping, not history: 'cancelled' rows
+    // age out on the same cut as recovered ones, or the table only ever grows.
     this.db.prepare(
-      "DELETE FROM alert_events WHERE state = 'resolved' AND resolved_at < ?")
+      "DELETE FROM alert_events WHERE state IN ('resolved','cancelled') AND resolved_at < ?")
       .run(aggCut)
     if (d1.changes || d2.changes) {
       console.log(`[History] retention: -${d1.changes} raw, -${d2.changes} 1m rows`)

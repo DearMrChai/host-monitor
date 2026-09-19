@@ -7,6 +7,9 @@
  *  - trigger after `debounce_cycles` consecutive ticks over threshold
  *    (offline bypasses the window and fires immediately)
  *  - escalation is immediate; de-escalation/recovery uses the same window
+ *  - an alert only "recovers" when its host is reporting and the reason is
+ *    gone: reclassifying/retiring closes it as `cancelled`, a host the Server
+ *    has no data for holds it (see UNKNOWN_GRACE_MS) - never a fake 已恢复
  *  - resolved alerts are kept `resolved_keep_minutes`, capped at history_capacity
  *  - host.status.level becomes the DEBOUNCED level; instant level moves to
  *    host.status.instant_level; in-window suspects appear in host.status.pending
@@ -20,6 +23,12 @@ const DEBOUNCE_CYCLES = cfg.debounce_cycles ?? 3
 const KEEP_MS = (cfg.resolved_keep_minutes ?? 5) * 60_000
 const HISTORY_CAPACITY = cfg.history_capacity ?? 200
 const TICK_MS = cfg.tick_ms ?? 2000
+// How long an alert may stay "frozen because its host is unknown to this
+// Server process" before it closes as stale instead of pinning the banner.
+// Agents reconnect within seconds after a restart, so this only has to cover
+// the reconnect window - keep it short, because a frozen CRIT keeps the client
+// crit loop running and a powered-off machine must not howl for half an hour.
+const UNKNOWN_GRACE_MS = (cfg.unknown_alert_grace_minutes ?? 5) * 60_000
 
 const RANK = { OK: 0, WARN: 1, CRIT: 2, OFFLINE: 3 }
 
@@ -48,14 +57,20 @@ class AlertEngine {
 
   /** S1 §3.3: a muted node's thresholds are neither evaluated nor resolved -
    *  the alert freezes where it was instead of faking a recovery. OFFLINE is
-   *  exempt from muting (availability is worth waking up for). */
-  muteSet(hosts, now = Date.now()) {
-    return new Set(hosts.filter((h) => roster.isMuted(h.host_id, now)).map((h) => h.host_id))
+   *  exempt from muting (availability is worth waking up for).
+   *  Derived from the roster, NOT from `hosts`: a muted node that is momentarily
+   *  missing from the store (Server restarted, Agent has not reconnected) must
+   *  still count as muted, or its frozen alert ages out into a fake recovery. */
+  muteSet(_hosts, now = Date.now()) {
+    return new Set(roster.mutedIds(now))
   }
 
   advance(hosts, now) {
     const seen = new Set()
     const muted = this.muted = this.muteSet(hosts, now)
+    // Hosts the Server has *any* record of in this process. Absent from this
+    // set means "we know nothing", not "it got healthy" - see the freeze below.
+    const known = new Set(hosts.map((h) => h.host_id))
 
     for (const host of hosts) {
       for (const r of host.status?.reasons || []) {
@@ -82,6 +97,7 @@ class AlertEngine {
         } else { // active
           e.latest_value = r.value
           e.underCycles = 0
+          e._unknownSince = null // reporting again: the no-news clock restarts
           const escalated = RANK[r.level] > RANK[e.level]
           if (escalated) e.level = r.level // escalate immediately
           if (escalated || now - (e._persistedAt || 0) >= 10_000) persist(e)
@@ -97,11 +113,40 @@ class AlertEngine {
       if (e.state === 'pending') {
         this.entries.delete(key) // window broken before firing
       } else if (e.state === 'active') {
-        e.underCycles += 1
-        if (e.underCycles >= DEBOUNCE_CYCLES) {
+        /* S1b: leaving the alarming population is not a recovery. When a node
+           is reclassified (临时) or retired while its alert is open, close it
+           as cancelled - ageing it into "已恢复" would tell the user the
+           machine came back, which is the opposite of what happened. */
+        const cls = roster.classOf(e.host_id)
+        const cancelledBy = cls === 'retired' ? 'retired'
+          : (cls === 'ephemeral' && e.metric === 'offline') ? 'reclassified' : null
+        if (cancelledBy) {
           e.state = 'resolved'
+          e.cancelled = cancelledBy
           e.resolved_at = Date.now()
           persist(e)
+        } else if (!known.has(e.host_id)) {
+          /* S1b defect 9: the Server has no record of this host at all in this
+             process - the window after a restart, before the Agents reconnect,
+             while restoreActive() has already put yesterday's alerts back.
+             Ageing here would print 已恢复 for a machine we have no data about,
+             so the entry holds. Bounded: a node that never returns must not pin
+             an alert forever, so after the grace it closes as 已失效, never 已恢复. */
+          e._unknownSince ??= now
+          if (now - e._unknownSince >= UNKNOWN_GRACE_MS) {
+            e.state = 'resolved'
+            e.cancelled = 'stale'
+            e.resolved_at = now
+            persist(e)
+          }
+        } else {
+          e._unknownSince = null
+          e.underCycles += 1
+          if (e.underCycles >= DEBOUNCE_CYCLES) {
+            e.state = 'resolved'
+            e.resolved_at = Date.now()
+            persist(e)
+          }
         }
       } else if (Date.now() - e.resolved_at > KEEP_MS) {
         this.entries.delete(key)
@@ -194,9 +239,15 @@ class AlertEngine {
       if (muted.has(e.host_id) && e.metric !== 'offline') continue
       const a = {
         id: e.id, host_id: e.host_id, hostname: e.hostname,
+        // Banner/list must call the node what the card calls it (S1b).
+        display_name: roster.get(e.host_id)?.display_name || e.hostname,
         metric: e.metric, source: e.source, level: e.level, state: e.state,
         value_at_trigger: e.value_at_trigger, latest_value: e.latest_value,
         threshold: e.threshold, started_at: e.started_at, resolved_at: e.resolved_at,
+        // 'reclassified' | 'retired' | 'stale' | null - how an alert ended,
+        // when it was not a recovery (S1b). The UI must not print 已恢复 for
+        // any of them; each reason has its own wording in resolvedText().
+        cancelled: e.cancelled || null,
       }
       if (e.state === 'resolved') resolved.push(a)
       else active.push(a)

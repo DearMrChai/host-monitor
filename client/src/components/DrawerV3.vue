@@ -1,7 +1,10 @@
 <script setup>
 import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import TrendChart from './TrendChart.vue'
-import { STATUS_TEXT, ROLE_LABELS, formatUptime } from '../lib/status.js'
+import {
+  STATUS_TEXT, ROLE_LABELS, formatUptime, displayName, formatSeenLast,
+  CLASS_LABELS, resolvedText,
+} from '../lib/status.js'
 
 /* V3 drawer: bottom slide-out with per-component / per-link detail (P4),
    P5: server-side history trend charts (GET /api/history) + persisted
@@ -228,7 +231,11 @@ const fmtDur = (ms) => {
       <div v-else-if="spec.kind === 'system'">
         <div class="kv-grid">
           <div class="kv" v-for="[k, v] in rows({
+              '显示名': displayName(host),
               'host_id': host.host_id, '主机名': host.hostname, '角色': ROLE_LABELS[host.role] || host.role,
+              '归类': CLASS_LABELS[host.presence_class] || CLASS_LABELS.persistent,
+              '上次在场': host.last_seen ? formatSeenLast(host.last_seen) : null,
+              '静默': host.muted_until ? '至 ' + formatSeenLast(host.muted_until) : null,
               '平台': host.platform,
               '开机时长': host.metrics?.system?.uptime_seconds != null
                 ? formatUptime(host.metrics.system.uptime_seconds) : null,
@@ -244,7 +251,7 @@ const fmtDur = (ms) => {
               <tr v-for="a in alertLog" :key="a.id + a.started_at">
                 <td :class="'lv-' + a.level.toLowerCase()">{{ a.level }}</td>
                 <td>{{ a.metric }}<template v-if="a.source !== a.metric"> @{{ a.source }}</template></td>
-                <td>{{ a.state === 'active' ? '进行中' : '已恢复' }}</td>
+                <td>{{ a.state === 'active' ? '进行中' : resolvedText(a) }}</td>
                 <td>{{ fmtTs(a.started_at) }}</td>
                 <td>{{ fmtDur((a.resolved_at || Date.now()) - a.started_at) }}</td>
               </tr>

@@ -5,7 +5,9 @@ import TopologyView from './views/TopologyView.vue'
 import DetailView from './views/DetailView.vue'
 import ClusterBar from './components/ClusterBar.vue'
 import AlertBanner from './components/AlertBanner.vue'
+import PassphraseDialog from './components/PassphraseDialog.vue'
 import { LEVEL_RANK } from './lib/status.js'
+import { admin, syncAdmin } from './lib/admin.js'
 import { unlock, playWarn, playCrit, setCritLoop } from './lib/sound.js'
 
 /* App shell (P1-P3): owns the single WebSocket to the server, the view
@@ -21,6 +23,7 @@ const hosts = ref([])
 const cluster = ref(null)
 const alerts = ref({ active: [], resolved: [] })
 const thresholds = ref({})
+const newNodes = ref([])
 const connected = ref(false)
 const route = ref({ name: 'overview', hostId: null, from: 'overview' })
 
@@ -73,6 +76,8 @@ function applySnapshot(msg) {
   hosts.value = msg.hosts || []
   cluster.value = msg.cluster || null
   alerts.value = msg.alerts || { active: [], resolved: [] }
+  newNodes.value = msg.new_nodes || []
+  syncAdmin(msg)
   if (msg.thresholds) thresholds.value = msg.thresholds
   handleSounds(alerts.value.active || [])
 }
@@ -117,6 +122,7 @@ onMounted(async () => {
       const data = await res.json()
       if (data.hosts) hosts.value = data.hosts
       if (data.cluster) cluster.value = data.cluster
+      if (data.admin) syncAdmin(data)
     }
   } catch (e) { /* WS will take over */ }
   connect()
@@ -134,11 +140,12 @@ onBeforeUnmount(() => {
   <div class="app-shell">
     <template v-if="route.name !== 'detail'">
       <ClusterBar :cluster="cluster" :connected="connected" :view="route.name"
-                  @toggle="setView" />
+                  :pending-count="newNodes.length"
+                  @toggle="setView" @goto-pending="setView('overview')" />
       <AlertBanner :alerts="alerts.active || []" @open="id => openDetail(id)" />
     </template>
     <OverviewView v-if="route.name === 'overview'"
-                  class="app-main" :hosts="hosts" :alerts="alerts"
+                  class="app-main" :hosts="hosts" :alerts="alerts" :new-nodes="newNodes"
                   @open="openDetail" />
     <TopologyView v-else-if="route.name === 'topology'"
                   class="app-main" :hosts="hosts"
@@ -146,10 +153,26 @@ onBeforeUnmount(() => {
     <DetailView v-else class="app-main"
                 :host="currentHost" :connected="connected"
                 :alerts="alerts" :thresholds="thresholds" @back="backFromDetail" />
+
+    <!-- Write results land here: the roster edits are fire-and-forget HTTP, and
+         a silent failure on "退役" is the worst possible outcome. -->
+    <transition name="flash">
+      <div v-if="admin.flash" class="app-flash" :class="admin.flash.kind">{{ admin.flash.text }}</div>
+    </transition>
+    <PassphraseDialog />
   </div>
 </template>
 
 <style>
 .app-shell { height: 100%; display: flex; flex-direction: column; }
 .app-main { flex: 1; min-height: 0; }
+.app-flash {
+  position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%); z-index: 90;
+  font-size: 12px; padding: 7px 14px; border-radius: 16px; pointer-events: none;
+  background: var(--bg-glass); border: 1px solid var(--border); color: var(--text);
+  box-shadow: 0 6px 20px rgba(0,0,0,.12);
+}
+.app-flash.err { border-color: var(--red); color: #b62324; }
+.flash-enter-active, .flash-leave-active { transition: opacity .25s, transform .25s; }
+.flash-enter-from, .flash-leave-to { opacity: 0; transform: translateX(-50%) translateY(6px); }
 </style>

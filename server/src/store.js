@@ -101,6 +101,9 @@ class MonitorStore {
         host.kind = node.kind;
         host.confirmed = !!node.confirmed;
         host.agent_version = node.agent_version;
+        // The ABSENT card says "last present HH:MM"; that must be the roster's
+        // persisted value, not host.lastSeen (which resets on a Server restart).
+        host.last_seen = node.last_seen;
       } else {
         host.presence_class = 'persistent';
         host.display_name = host.hostname;

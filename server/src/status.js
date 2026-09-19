@@ -160,15 +160,30 @@ export function evaluateCluster(hosts) {
   const online = hosts.filter((h) => h.online);
   const gpusOf = (h) => (h.metrics?.gpu || []);
 
-  const linkLevels = online.map((h) => h.status?.components?.link?.level)
+  /* A muted node contributes nothing to the top-line health/link count: the
+     whole point of 🔕 is "I know about this one, stop shouting about it at the
+     fleet level". Two honesty limits keep this from becoming self-deception -
+     availability is never silenced (an offline muted node still reads OFFLINE),
+     and every card keeps its own colour plus the expiry time. */
+  const levelForHealth = (h) => {
+    const s = h.status;
+    if (!s) return null;
+    if (s.muted && h.online) return null;
+    return s.level;
+  };
+  const silenced = (h) => !!h.status?.muted && !!h.online;
+
+  const linkLevels = online.filter((h) => !silenced(h))
+    .map((h) => h.status?.components?.link?.level)
     .filter((l) => l && l !== 'OK');
 
   const epOnline = ephemeral.filter((h) => h.online);
 
   return {
-    health: worstLevel(...persistent.map((h) => h.status?.level)) || 'OK',
+    health: worstLevel(...persistent.map(levelForHealth)) || 'OK',
     online: persistent.filter((h) => h.online).length,
     total: persistent.length,
+    muted_count: hosts.filter(silenced).length,
     presence: { online: epOnline.length, total: ephemeral.length },
     link: {
       worst_level: worstLevel(...linkLevels) || null,
