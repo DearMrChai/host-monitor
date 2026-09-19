@@ -82,6 +82,17 @@ export function resolvedText(a) {
   return '已恢复'
 }
 
+/* Two roads lead to 缺席, and they say different things about the Server
+   (S5 §5.1): `restart` is "this process has never seen it since boot", `silence`
+   is "this process watched it go quiet past the degrade window". Printing the
+   first sentence for the second would tell the reader to go restart something
+   that is fine. One function, because the panel and the board must not keep the
+   server's vocabulary in sync by hand. */
+export function absenceCause(host) {
+  if (!host?.absent_record) return null
+  return host.absent_by === 'silence' ? 'Server 运行期间静默超时' : '自 Server 重启后未再上报'
+}
+
 export function formatSeenLast(ts) {
   if (!ts) return '时间未知'
   const d = new Date(ts)

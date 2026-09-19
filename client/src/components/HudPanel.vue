@@ -4,6 +4,7 @@ import EventStream from './EventStream.vue'
 import {
   ROLE_LABELS, formatUptime, formatReason, resolvedText,
   displayName, isAbsent, formatSeenLast, formatAgo, CLASS_LABELS, CLASS_HINT,
+  absenceCause,
 } from '../lib/status.js'
 import { stream } from '../lib/events.js'
 
@@ -161,7 +162,7 @@ const uptimeText = computed(() => {
     </template>
 
     <div v-else-if="absent" class="hud-absent">
-      {{ host.absent_record ? '该常驻节点自 Server 重启后未再上报' : '该临时节点已离场' }}
+      {{ host.absent_record ? `该常驻节点${absenceCause(host)}` : '该临时节点已离场' }}
       · 上次在场 {{ formatSeenLast(host.last_seen) }}（{{ formatAgo(host.last_seen) }}）
       <em>{{ host.absent_record
         ? '计入在线率与事件流，不计入集群健康度'

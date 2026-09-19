@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import EventStream from '../components/EventStream.vue'
-import { displayName } from '../lib/status.js'
+import { displayName, formatAgo } from '../lib/status.js'
 import { admin, canWrite, openDialog, rosterPost, flash } from '../lib/admin.js'
 
 /* S2c 接入页 (design §6): the four blocks the design asked for — mint a code,
@@ -32,9 +32,17 @@ const ttlMin = ref(15)
 const maxUses = ref(1)
 const seenPaired = new Set()    // "codeId:host_id" we have already announced
 const justJoined = ref([])      // host_ids that paired since the last poll
+/* S5 §4: the ZeroTier ledger is a separate poll on a separate clock - the server
+   itself only refreshes it every ~30s, and this is a ledger, not a workbench, so
+   the 3s pairing loop has no business carrying it. */
+const presence = ref(null)
+const editing = ref(null)       // zt_addr whose binding row is open
+const editHost = ref('')
+const editLabel = ref('')
 
 let pollTimer = null
 let tickTimer = null
+let presenceTimer = null
 
 const MODE_TEXT = {
   off: '接入凭据校验已关闭（HM_INGEST_TOKEN=off）：任何机器都能上报，仅供排障时临时使用',
@@ -79,13 +87,87 @@ async function load() {
 
 onMounted(() => {
   load()
+  loadPresence()
   pollTimer = setInterval(load, 3000)
+  presenceTimer = setInterval(loadPresence, 10_000)
   tickTimer = setInterval(() => { now.value = Date.now() }, 1000)
 })
 onBeforeUnmount(() => {
   clearInterval(pollTimer)
+  clearInterval(presenceTimer)
   clearInterval(tickTimer)
 })
+
+/* ---------- ZeroTier presence (S5 §4.3) ----------
+   This is a ledger of *devices*, not of nodes: no four-state colour, no alert,
+   no place in the cluster numbers (G4). What it answers is the narrower question
+   "是不是在我这张 overlay 里", so the card stays grey-scale typography and never
+   borrows the health palette. */
+
+async function loadPresence() {
+  try {
+    const res = await fetch('/api/presence')
+    if (res.ok) presence.value = await res.json()
+  } catch { /* the pairing poll already says "server unreachable" louder */ }
+}
+
+const PRESENCE_EMPTY = {
+  'no-config': '未启用：Server 边上没有 config/zt.json（模板见 zt.example.json）。'
+    + '在场台账读的是这台机器自己的 ZeroTier 本地接口，不装任何东西、也不替你保管别人的凭据。',
+  disabled: '已在 config/zt.json 里关掉（enabled:false）。',
+}
+const PRESENCE_ERROR = {
+  'token-unreadable': '读不到 ZeroTier 本地接口令牌（authtoken.secret 需要 Server 运行账号有权读）',
+  'http-401': '令牌不被 ZeroTier 接受（zerotier-one 换过令牌？重启 Server 让它重读）',
+  'http-403': 'ZeroTier 拒绝了请求（本机权限）',
+  'http-500': 'ZeroTier 本地接口报错',
+  unreachable: 'ZeroTier 本地接口连不上（这台机器上 zerotier-one 没在跑）',
+  timeout: 'ZeroTier 本地接口超时',
+  'bad-shape': 'ZeroTier 本地接口返回了不认识的结构',
+}
+const presenceEmptyText = computed(() => {
+  const p = presence.value
+  if (!p) return '正在读取…'
+  if (!p.enabled) return PRESENCE_EMPTY[p.reason] || '未启用。'
+  return null
+})
+/* A dead source is a degraded source, not an incident: say so once, and keep
+   showing the last thing the ledger saw rather than blanking it. */
+const presenceErrorText = computed(() => {
+  const p = presence.value
+  return p && p.enabled && !p.source_ok
+    ? `${PRESENCE_ERROR[p.error] || `ZeroTier 源不可用（${p.error || '未知'}）`}｜下面的行是最后一次看到的`
+    : null
+})
+
+function openEdit(peer) {
+  editing.value = peer.zt_addr
+  editHost.value = peer.host_id || ''
+  editLabel.value = peer.label || ''
+}
+function peerTitle(p) {
+  if (p.display_name) return p.display_name
+  if (p.label) return p.label
+  return `未归名 ${p.zt_addr.slice(0, 4)}…`
+}
+
+async function saveAlias(peer) {
+  if (!canWrite()) {
+    openDialog(admin.passphraseSet ? '需要管理口令才能归名' : '先设置管理口令，才能归名',
+      () => saveAlias(peer))
+    return
+  }
+  const r = await rosterPost('/api/presence/alias', {
+    zt_addr: peer.zt_addr,
+    host_id: editHost.value || null,
+    label: (editLabel.value || '').trim() || null,
+  })
+  if (r.ok) {
+    flash(editHost.value || editLabel.value ? '已归名' : '已清除该行的绑定')
+    editing.value = null
+    loadPresence()
+  }
+}
 
 /* ---------- mint ---------- */
 
@@ -313,6 +395,43 @@ const keyless = computed(() => admin.keylessAgents || [])
           </div>
           <p class="ec-note">道具照常进告警面板，但<b>不</b>计入集群健康度、在线分母与聚合负载。关掉是真的关：生成停止、节点退役、其告警以"已退役"闭合。</p>
         </section>
+
+        <!-- S5 §4.3: the presence ledger. Deliberately not a node list — no state
+             dot, no colour from the four-state palette, and nothing here feeds an
+             alert or a cluster number (G4). It answers one question: is this
+             machine inside my overlay right now. -->
+        <section class="en-card">
+          <h3>ZeroTier 在场
+            <em>{{ presence ? `在场 ${presence.counts.present} · 可见 ${presence.counts.visible}` : '读取中…' }}</em>
+          </h3>
+          <p class="ec-note" v-if="presenceEmptyText">{{ presenceEmptyText }}</p>
+          <template v-else>
+            <p class="ec-note zp-err" v-if="presenceErrorText">{{ presenceErrorText }}</p>
+            <p class="ec-note" v-if="!presence.peers.length">
+              台账是空的：这台 Server 的 ZeroTier 目前没有可见对端。装好 ZeroTier 并按说明放一个 <code>config/zt.json</code> 后，这里会开始记。
+            </p>
+            <div class="zp-row" v-for="p in presence.peers" :key="p.zt_addr" :class="{ gone: !p.reachable }">
+              <span class="zp-name" :title="'zt ' + p.zt_addr">{{ peerTitle(p) }}</span>
+              <span class="zp-sub" v-if="p.matched_by === 'name'">按主机名</span>
+              <span class="zp-sub" v-else-if="p.matched_by === 'alias'">手工</span>
+              <span class="zp-sub amb" v-if="p.ambiguous" title="名册里有两台以上报了这个名字，不替你猜">同名多台</span>
+              <span class="zp-lat">{{ p.reachable ? `${p.latency_ms}ms`
+                : (p.remembered ? `最后可见 ${formatAgo(p.last_seen)}` : '不可达') }}</span>
+              <button class="en-x" @click="editing === p.zt_addr ? (editing = null) : openEdit(p)">
+                {{ editing === p.zt_addr ? '收起' : '归名' }}
+              </button>
+              <div class="zp-edit" v-if="editing === p.zt_addr">
+                <select v-model="editHost">
+                  <option value="">— 不绑节点 —</option>
+                  <option v-for="n in rosterNodes" :key="n.host_id" :value="n.host_id">{{ displayName(n) }}</option>
+                </select>
+                <input v-model.trim="editLabel" maxlength="40" placeholder="或只写个名字（如「客厅盒子」）" spellcheck="false">
+                <button class="en-primary" @click="saveAlias(p)">保存</button>
+              </div>
+            </div>
+            <p class="ec-note">在场 ≠ 健康：它只说明这台机器在我的 overlay 里可达，不装 Agent、不采指标、不参与告警。</p>
+          </template>
+        </section>
       </aside>
     </div>
   </div>
@@ -419,6 +538,30 @@ button { font: inherit; }
 .dm-state { font-size: 11px; color: var(--ok-ink); }
 .dm-state.off { color: var(--text3); }
 .en-card p b { color: var(--text2); }
+/* Presence rows: grey-scale on purpose (S4 §1.1 rule 2 — the four-state palette
+   carries health, and "reachable on the overlay" is not health). */
+.zp-row {
+  display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--text2);
+  padding: 3px 0; border-top: 1px solid var(--border); flex-wrap: wrap;
+}
+.zp-row:first-of-type { border-top: none; }
+.zp-row.gone { color: var(--text3); }
+.zp-name { font-weight: 600; color: var(--text); }
+.zp-row.gone .zp-name { font-weight: 400; }
+.zp-sub {
+  font-size: 10px; padding: 1px 6px; border-radius: 8px;
+  border: 1px solid var(--border); color: var(--text3);
+}
+.zp-sub.amb { border-style: dashed; }
+.zp-lat { margin-left: auto; font-variant-numeric: tabular-nums; }
+.zp-edit { width: 100%; display: flex; align-items: center; gap: 6px; margin: 2px 0 4px; }
+.zp-edit select, .zp-edit input {
+  font: inherit; font-size: 11px; padding: 3px 6px; min-width: 0;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--bg-glass); color: var(--text);
+}
+.zp-edit select { flex: 0 1 45%; }
+.zp-edit input { flex: 1; }
+.zp-err { color: var(--warn-ink); }
 @media (max-width: 900px) {
   .en-body { grid-template-columns: 1fr; }
 }
