@@ -6,7 +6,7 @@
  * in the system temp dir, so the dev/production data dir is never touched.
  * Set HM_VERBOSE=1 to see the child Server's stdout.
  */
-import { writeFileSync, mkdtempSync } from 'fs'
+import { writeFileSync, mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import path from 'path'
 import { spawn } from 'child_process'
@@ -308,7 +308,11 @@ ok('D6 改口令必须带原口令',
   roster.setPassphrase('another', 'wrong').ok === false
   && roster.setPassphrase('another', 'open-sesame').ok === true
   && roster.checkPassphrase('another') === true)
-const metaRows = new DatabaseSync(ROSTER_DB).prepare('SELECT value FROM meta').all()
+/* Read the DB directly to prove what actually landed on disk - but keep the
+   handle: an open roster.db is what makes the final rmSync fail on Windows
+   (locked file, directory left behind), so it gets closed with the rest. */
+const metaDb = new DatabaseSync(ROSTER_DB)
+const metaRows = metaDb.prepare('SELECT value FROM meta').all()
 ok('D7 口令以 scrypt 散列入库，明文不落盘',
   metaRows.every((r) => String(r.value).startsWith('scrypt$'))
   && !JSON.stringify(metaRows).includes('another'),
@@ -678,6 +682,23 @@ await withServer(async () => {
     codes.ingest.mode === 'legacy' && codes.ingest.keyless_agents.includes('live-1'),
     JSON.stringify({ mode: codes.ingest.mode, keyless: codes.ingest.keyless_agents }))
 
+  // S2c needs one thing S2a did not provide: revoking a code you can no longer
+  // see. The page only ever holds the tail, so the handle has to be the rowid.
+  const m3 = await post('/api/admin/enroll', { ttl_minutes: 10, max_uses: 2, note: 'g8' }, 'another')
+  const listed = (await get('/api/enroll')).codes.find((c) => c.code_tail === m3.json.code.slice(-4))
+  ok('G8 列表给出撤销句柄（id），且仍不含明文',
+    listed?.id > 0 && !('code' in listed) && listed.note === 'g8', JSON.stringify(listed))
+  ok('G8b 撤销也要口令', (await post('/api/admin/enroll/revoke', { id: listed.id })).status === 403)
+  const revoked = await post('/api/admin/enroll/revoke', { id: listed.id }, 'another')
+  const after = await connectAgent('g8-box', 'G8Box', { token: m3.json.code })
+  const afterAck = await after.ack
+  ok('G8c 只凭 id 就能撤销；这枚码之后接入会被拒（unknown_code）',
+    revoked.status === 200 && afterAck.type === 'rejected' && afterAck.reason === 'unknown_code'
+    && !(await get('/api/roster')).nodes.some((n) => n.host_id === 'g8-box'),
+    JSON.stringify({ st: revoked.status, ack: afterAck }))
+  ok('G8d 撤销过的码从列表里消失',
+    !(await get('/api/enroll')).codes.some((c) => c.id === listed.id))
+
   const sBefore = await snapshot()
   const on = await post('/api/admin/demo', { enabled: true }, 'another')
   // Past the 3-cycle debounce window: the props must behave like real machines
@@ -735,5 +756,13 @@ await withServer(async () => {
 }, { ...CHILD_ENV, HM_INGEST_TOKEN: 'legacy' })
 
 history.db?.close?.()
-console.log(`\n[selftest-s1] pass=${pass} fail=${fail}   dir=${DIR}`)
+metaDb.close()
+roster.db?.close?.()   // sections A-D use an in-process Roster on the same file
+/* One throwaway dir per run used to pile up (22 by lunchtime on this box). The
+   path only earns its keep when something failed, so: clean on green, print
+   and keep on red. A handle still closing must not turn a passing run red. */
+if (!fail) {
+  try { rmSync(DIR, { recursive: true, force: true }) } catch { /* best effort */ }
+}
+console.log(`\n[selftest-s1] pass=${pass} fail=${fail}${fail ? `   dir kept: ${DIR}` : ''}`)
 process.exit(fail ? 1 : 0)

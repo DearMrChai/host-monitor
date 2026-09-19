@@ -11,7 +11,7 @@
  * pick an interpreter. Exits 0 with a loud SKIP when Python or its deps are
  * missing, so a machine without the agent environment cannot fail CI-style runs.
  */
-import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'fs'
+import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import path from 'path'
 import { spawn, spawnSync } from 'child_process'
@@ -260,5 +260,9 @@ try {
   await killAll()
 }
 
-console.log(`\n[pair-selftest] pass=${pass} fail=${fail}   dir=${DIR}`)
+// Same rule as the roster suite: clean on green, keep and print on red.
+if (!fail) {
+  try { rmSync(DIR, { recursive: true, force: true }) } catch { /* best effort */ }
+}
+console.log(`\n[pair-selftest] pass=${pass} fail=${fail}${fail ? `   dir kept: ${DIR}` : ''}`)
 process.exit(fail ? 1 : 0)

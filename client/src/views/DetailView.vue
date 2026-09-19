@@ -16,8 +16,15 @@ const props = defineProps({
   connected: { type: Boolean, default: false },
   alerts: { type: Object, default: () => ({ active: [], resolved: [] }) },
   thresholds: { type: Object, default: () => ({}) },
+  /* Which view opened this detail page. The back button is the only way out
+     (the top bar is hidden here), so a label that names the wrong place is a
+     real navigation bug, not a cosmetic one. */
+  from: { type: String, default: 'overview' },
 })
 defineEmits(['back'])
+
+const BACK_TEXT = { overview: '← 总览', topology: '← 拓扑', enroll: '← 接入' }
+const backText = computed(() => BACK_TEXT[props.from] || BACK_TEXT.overview)
 
 const viewport = ref(null)
 const topology = ref(defaultTopology)
@@ -156,7 +163,7 @@ onBeforeUnmount(() => {
 
         <header class="top-bar">
           <div class="tb-left">
-            <button class="back-btn" @click="$emit('back')">← 总览</button>
+            <button class="back-btn" @click="$emit('back')">{{ backText }}</button>
             <span class="conn-dot" :class="{ ok: connected }" />
             <span class="tb-title">Host Monitor</span>
             <span class="tb-host" v-if="hostName">{{ hostName }}</span>

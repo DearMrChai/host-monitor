@@ -268,16 +268,27 @@ class Roster {
     return { ok: true, remaining: row.max_uses ? row.max_uses - row.uses - 1 : null }
   }
 
-  /** Codes still inside their window - what the pairing page lists. */
+  /** Codes still inside their window - what the pairing page lists.
+   *  `id` is the rowid on purpose: the page has to be able to revoke a code it
+   *  can no longer see (the plaintext is shown once at mint time), and a
+   *  tail-4 match would be a handle two machines could collide on. */
   activeCodes(now = Date.now()) {
     return this.db.prepare(
-      'SELECT code, created_at, expires_at, max_uses, uses, note, paired_ids FROM enroll_codes WHERE expires_at > ? ORDER BY created_at DESC LIMIT 20',
+      'SELECT rowid AS id, code, created_at, expires_at, max_uses, uses, note, paired_ids FROM enroll_codes WHERE expires_at > ? ORDER BY created_at DESC LIMIT 20',
     ).all(now).map((r) => ({
-      code: r.code, created_at: r.created_at, expires_at: r.expires_at,
+      id: r.id, code: r.code, created_at: r.created_at, expires_at: r.expires_at,
       max_uses: r.max_uses, uses: r.uses, note: r.note,
       remaining: r.max_uses ? Math.max(0, r.max_uses - r.uses) : null,
       paired_ids: r.paired_ids ? r.paired_ids.split(',') : [],
     }))
+  }
+
+  /** Revoke by that non-secret handle. */
+  revokeById(id) {
+    const n = Number(id)
+    if (!Number.isFinite(n) || n <= 0) return { ok: false, error: 'no such code' }
+    const r = this.db.prepare('DELETE FROM enroll_codes WHERE rowid = ?').run(n)
+    return { ok: r.changes > 0, error: r.changes ? null : 'no such code' }
   }
 
   revokeEnroll(code) {

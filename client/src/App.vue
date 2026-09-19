@@ -3,6 +3,7 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import OverviewView from './views/OverviewView.vue'
 import TopologyView from './views/TopologyView.vue'
 import DetailView from './views/DetailView.vue'
+import EnrollView from './views/EnrollView.vue'
 import ClusterBar from './components/ClusterBar.vue'
 import AlertBanner from './components/AlertBanner.vue'
 import PassphraseDialog from './components/PassphraseDialog.vue'
@@ -31,10 +32,14 @@ const currentHost = computed(() =>
   hosts.value.find(h => h.host_id === route.value.hostId) || null,
 )
 
+/* Where a detail page returns to. A list of names, not a ternary per view: S2c
+   added 接入 as a third origin and the old form silently dropped it. */
+const ORIGINS = ['topology', 'enroll']
+
 function openDetail(hostId) {
   route.value = {
     name: 'detail', hostId,
-    from: route.value.name === 'topology' ? 'topology' : 'overview',
+    from: ORIGINS.includes(route.value.name) ? route.value.name : 'overview',
   }
 }
 
@@ -43,7 +48,7 @@ function setView(name) {
 }
 
 function backFromDetail() {
-  const to = route.value.from === 'topology' ? 'topology' : 'overview'
+  const to = ORIGINS.includes(route.value.from) ? route.value.from : 'overview'
   route.value = { name: to, hostId: null, from: to }
 }
 
@@ -150,8 +155,11 @@ onBeforeUnmount(() => {
     <TopologyView v-else-if="route.name === 'topology'"
                   class="app-main" :hosts="hosts"
                   @open="openDetail" />
+    <EnrollView v-else-if="route.name === 'enroll'"
+                class="app-main" :hosts="hosts"
+                @open="openDetail" />
     <DetailView v-else class="app-main"
-                :host="currentHost" :connected="connected"
+                :host="currentHost" :connected="connected" :from="route.from"
                 :alerts="alerts" :thresholds="thresholds" @back="backFromDetail" />
 
     <!-- Write results land here: the roster edits are fire-and-forget HTTP, and

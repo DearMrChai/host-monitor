@@ -254,7 +254,13 @@ app.get('/api/enroll', (req, res) => {
 });
 
 app.post('/api/admin/enroll/revoke', requireAdmin, (req, res) => {
-  const r = roster.revokeEnroll(String((req.body || {}).code || ''));
+  const b = req.body || {};
+  // Either handle works: the plaintext code (only held by the tab that minted
+  // it) or the rowid the pairing page always has. Neither is guessable-useful:
+  // revoking is a write, and writes need the passphrase.
+  const r = b.id !== undefined && b.id !== null
+    ? roster.revokeById(b.id)
+    : roster.revokeEnroll(String(b.code || ''));
   if (!r.ok) return res.status(404).json({ error: r.error });
   res.json({ ok: true });
 });

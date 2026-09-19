@@ -21,11 +21,24 @@ export const admin = reactive({
   stored: readStored(),   // ours, localStorage: survives reloads, never synced
   dialog: null,           // null | { mode: 'create' | 'enter' | 'change', reason, retry }
   flash: null,            // { text, kind } — 3s toast for write results
+  /* S2c: the ingest-credential state is a server fact, and the pairing page is
+     the wrong place to re-derive it from a request. It already arrives with
+     every snapshot, so the top bar and the page cannot disagree. */
+  ingestMode: 'legacy',
+  keylessAgents: [],
+  demo: { enabled: false, count: 0 },
 })
 
 /** Called by App.vue on every snapshot so the UI knows writes are even possible. */
 export function syncAdmin(snapshot) {
-  if (snapshot?.admin) admin.passphraseSet = !!snapshot.admin.passphrase_set
+  const a = snapshot?.admin
+  if (!a) return
+  admin.passphraseSet = !!a.passphrase_set
+  // GET /api/hosts only carries passphrase_set, so each field is guarded rather
+  // than assumed - a missing key must not look like "mode: undefined".
+  if (a.ingest_mode) admin.ingestMode = a.ingest_mode
+  if (Array.isArray(a.keyless_agents)) admin.keylessAgents = a.keyless_agents
+  if (a.demo) admin.demo = { enabled: !!a.demo.enabled, count: Number(a.demo.count) || 0 }
 }
 
 export const canWrite = () => admin.passphraseSet && !!admin.stored
