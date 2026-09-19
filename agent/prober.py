@@ -29,8 +29,14 @@ IS_WINDOWS = platform.system() == "Windows"
 
 # "time=1ms" / "time<1ms" / "时间=1ms" / "时间<1ms"
 _RTT_RE = re.compile(r"(?:time|时间)\s*[=<]\s*([\d.]+)\s*ms", re.IGNORECASE)
+# GBK consoles garble the CJK "时间" prefix; the ASCII "<1ms" tail survives.
+# Fallback only tried after the strict pattern fails (first numeric ...ms token).
+_RTT_LOOSE_RE = re.compile(r"[<=]\s*([\d.]+)\s*ms", re.IGNORECASE)
 # "Reply from ..." / "来自 ... 的回复" / Linux+macOS "64 bytes from ..."
-_REPLY_RE = re.compile(r"(?:reply from|来自|bytes from)", re.IGNORECASE)
+# TTL= is present in every IPv4 echo reply regardless of console codepage (GBK
+# systems mangle CJK bytes when decoded as UTF-8 — 231 LTSC proved it), so it
+# is the encoding-agnostic reply marker.
+_REPLY_RE = re.compile(r"(?:reply from|来自|bytes from|TTL=)", re.IGNORECASE)
 
 OK, FAIL, IND = "ok", "fail", "ind"
 
@@ -165,7 +171,7 @@ class Prober:
             return IND, None  # hung: inconclusive, do not count
         text = out.decode(errors="replace")
         if _REPLY_RE.search(text):
-            m = _RTT_RE.search(text)
+            m = _RTT_RE.search(text) or _RTT_LOOSE_RE.search(text)
             return OK, float(m.group(1)) if m else None
         # No reply: unreachable vs ICMP-blocked is indistinguishable here.
         # "Request timed out" alone => blocked/filtered (IND, TCP may tell more);
