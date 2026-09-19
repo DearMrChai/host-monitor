@@ -705,6 +705,32 @@ await withServer(async () => {
   ok('G6e 关演示时它的告警以"已退役"关闭，不会伪装成"已恢复"',
     sOff.alerts.resolved.some((a) => a.host_id === 'sim-media' && a.cancelled === 'retired'),
     JSON.stringify(sOff.alerts.resolved.map((a) => `${a.host_id}/${a.metric}:${a.cancelled}`)))
+
+  {
+    /* Last, on purpose: this machine pairs and then leaves, and its OFFLINE
+       would otherwise flip cluster.health/online inside the G6 before/after
+       comparisons above.
+       S2 §5 in reverse: `kind` decides whether a node counts toward the real
+       fleet, so the Agent must not get to choose it. A machine that pairs and
+       immediately claims to be a demo prop has to land as a normal agent -
+       otherwise "关掉演示后数字不变" only holds until someone spoofs a label. */
+    const m2 = await post('/api/admin/enroll', { ttl_minutes: 5, max_uses: 1 }, 'another')
+    const spoof = await connectAgent('spoof-1', 'SpoofBox',
+      { token: m2.json.code, kind: 'demo' })
+    const sa = await spoof.ack
+    await new Promise((res) => setTimeout(res, 400))
+    const r3 = await get('/api/roster')
+    const s5 = await snapshot()
+    ok('G7 接入帧自报 kind="demo" 无效：真机不能靠贴标签逃出分母与健康度',
+      sa.type === 'registered'
+      && r3.nodes.find((n) => n.host_id === 'spoof-1')?.kind === 'agent'
+      && s5.hosts.find((h) => h.host_id === 'spoof-1')?.kind === 'agent'
+      && s5.cluster.total >= 2 && s5.cluster.demo.total === 0,
+      JSON.stringify({ ack: sa.type, rkind: r3.nodes.find((n) => n.host_id === 'spoof-1')?.kind,
+                       total: s5.cluster.total, demo: s5.cluster.demo }))
+    spoof.close()
+  }
+
   again.close()
 }, { ...CHILD_ENV, HM_INGEST_TOKEN: 'legacy' })
 

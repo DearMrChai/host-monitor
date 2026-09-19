@@ -84,9 +84,13 @@ agentWss.on('connection', (ws, req) => {
           topology: msg.topology,  // Pass topology through
           agent_version: msg.agent_version,
           fingerprint: msg.fingerprint,
-          kind: msg.kind,
+          // `kind` is deliberately NOT taken from the frame: demo/observed are
+          // server-side classifications, and a node that could call itself
+          // "demo" could opt out of the cluster denominator and the health
+          // roll-up (S2 §5 in reverse). The in-process demo generator is the
+          // only caller that passes a kind.
           // S2 §2: pairing mints the node's standing key, which the Agent then
-          // keeps in agent.json. Deliberately not echoed to any read endpoint.
+          // keeps in its identity file. Deliberately not echoed to any read endpoint.
           node_key: v.node_key || null,
           confirmed: !!v.paired,
         });
