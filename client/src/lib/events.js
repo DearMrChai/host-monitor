@@ -42,6 +42,7 @@ const stream = reactive({
 let timer = null
 let subscribers = 0
 let inflight = null
+let warned = false
 
 async function load() {
   if (inflight) return inflight
@@ -56,10 +57,18 @@ async function load() {
     stream.truncated = !!data.truncated
     stream.error = null
     stream.fetchedAt = Date.now()
+    warned = false
   } catch (e) {
     // Keep the last good rows: an empty stream because the Server is restarting
     // is a lie of the same shape as the one S3 exists to remove.
     stream.error = e.message
+    /* The console is where a 掉帧/取数失败 belongs - not the event stream, which
+       holds facts about the fleet, not about this browser tab (S4 §1.4). Logged
+       once per streak so a Server restart does not fill the log. */
+    if (!warned) {
+      warned = true
+      console.warn('[events] 事件流读取失败，界面显示的是上一次成功的记录:', e.message)
+    }
   } finally {
     stream.loading = false
     inflight = null
@@ -98,6 +107,20 @@ export function unsubscribe() {
 }
 
 export const refresh = load
+
+/**
+ * How old the shared store is, for anyone who must not turn a fetch failure into
+ * a reassurance. The kiosk needs this: the wall reads "24h 内没有变化" as
+ * "nothing is wrong", and an empty list because the poll has been failing for an
+ * hour is exactly the H12-shaped lie S3 exists to remove (S4 §2.3).
+ *
+ * `now` is an input, not a hidden Date.now(): a view that already keeps one
+ * clock must not create a second, or the event line and the 停止刷新 banner can
+ * disagree about what time it is.
+ */
+export function streamAgeMs(now = Date.now()) {
+  return stream.fetchedAt ? Math.max(0, now - stream.fetchedAt) : null
+}
 
 export function eventsFor(hostId = null, kind = stream.kind) {
   const rows = hostId ? stream.events.filter((e) => e.host_id === hostId) : stream.events

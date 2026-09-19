@@ -40,6 +40,16 @@ export function displayName(host) {
   return host?.display_name || host?.hostname || host?.host_id || '?'
 }
 
+/**
+ * L0 truncation (S4 §1.3): at three metres a name is a landmark, not a label.
+ * One function because the 8-char rule and the ellipsis must not be retyped at
+ * each call site, and the full name stays available everywhere else.
+ */
+export function shortName(name, max = 8) {
+  const s = String(name ?? '')
+  return s.length > max ? `${s.slice(0, max - 1)}…` : s
+}
+
 export function isAbsent(host) {
   return !host.online && host.status?.absent === true
 }
@@ -104,7 +114,7 @@ export function attentionRank(host) {
 }
 
 /** The load that breaks a tie inside one attention band. */
-function loadOf(host) {
+export function loadOf(host) {
   const m = host.metrics
   if (!m) return -1
   const gpus = (m.gpu || []).map((g) => g.usage_percent ?? 0)

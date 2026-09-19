@@ -1,7 +1,7 @@
 <script setup>
 import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { ClusterTopologyRenderer } from '../three/ClusterTopologyRenderer.js'
-import { sortHostsForOverview, deviceLevel, displayName, isAbsent } from '../lib/status.js'
+import { topologyViewModel } from '../lib/topology-vm.js'
 
 /* V1.5 cluster topology (P3): 3D star view of link quality.
    Top cluster bar / alert banner live in the App shell (shared with V1). */
@@ -14,28 +14,14 @@ const emit = defineEmits(['open'])
 const viewport = ref(null)
 let renderer = null
 
-function viewModel() {
-  return sortHostsForOverview(props.hosts).map(h => ({
-    id: h.host_id,
-    name: displayName(h),
-    deviceLevel: deviceLevel(h),
-    linkLevel: h.status?.components?.link?.level || null,
-    online: !!h.online,
-    absent: isAbsent(h),
-    links: (h.status?.components?.link?.targets || []).map(t => ({
-      key: t.target, name: t.name, rtt: t.rtt_ms, loss: t.loss_pct, level: t.level,
-    })),
-  }))
-}
-
 onMounted(() => {
   renderer = new ClusterTopologyRenderer(viewport.value)
   renderer.enableClicks()
   renderer.onNodeClick = (id) => emit('open', id)
-  renderer.update(viewModel())
+  renderer.update(topologyViewModel(props.hosts))
 })
 
-watch(() => props.hosts, () => renderer?.update(viewModel()))
+watch(() => props.hosts, () => renderer?.update(topologyViewModel(props.hosts)))
 
 onBeforeUnmount(() => {
   renderer?.dispose()
