@@ -1,99 +1,83 @@
-# LAN Host Monitor - 3D Digital Twin
+# LAN Host Monitor — 局域网 / ZeroTier 多机监控看板
 
-局域网主机监控系统，基于 3D 数字孪生可视化。实时监控局域网内各主机的 CPU、GPU（多卡）、内存（多条）、网络速度等硬件指标。
-
-## Architecture
+给自己和朋友的一小群机器用的：**先回答"现在有什么不对"，再回答"具体是什么"**。
+它不是企业级监控，而是一个**变化检测器**——常驻机器在不在、负载有没有越过这条线、链路臂还通不通、以及过去 24 小时里哪一刻变了。
 
 ```
-[Host A: Python Agent] --+
-[Host B: Python Agent] --+-- WebSocket --> [Node.js Server] -- WebSocket --> [Vue3 + Three.js Client]
-[Host C: Python Agent] --+                  (relay/aggregate)                (3D Digital Twin Dashboard)
+各设备 Agent (Python) ──ws──> Server :9100 (接入，可强制凭据)
+                                │  ├─ SQLite：历史库 + 名册库（含配置真源）
+浏览器 / 看板        ──http+ws──> Server :9101 (REST + 2s 广播 + 静态看板)
 ```
 
-## Quick Start
+## 运行要求
 
-### Prerequisites
+- **Node 22+**（Server 用内置 `node:sqlite`，所以不引第三方 ORM；依赖只有 `ws`/`express`/`cors`）
+- Python 3.9+ + `agent/requirements.txt`（`psutil`、`websockets`、`nvidia-ml-py`；无 NVIDIA 卡时 GPU 自动降级为静态信息）
+- 一台常开的机器跑 Server（本项目实际部署在低功耗小主机上，监控是它的**附属功能**，不是专职服务器）
 
-- Python 3.9+
-- Node.js 18+
-- (Optional) NVIDIA GPU + drivers for GPU monitoring
-
-### 1. Start the Server
+## 快速开始
 
 ```bash
-cd server
-npm install
-npm run dev
+# 1) Server
+cd server && npm install && npm run dev        # :9100 接入 / :9101 看板
+
+# 2) 前端（开发模式；生产用 npm run build 后由 Server 直接托管 client/dist）
+cd client && npm install && npm run dev        # http://localhost:5173
+
+# 3) 每台被监控机器上的 Agent
+cd agent && pip install -r requirements.txt
+python main.py --server ws://<SERVER_IP>:9100 --host-id <节点ID> --role <角色>
 ```
 
-Server will listen on:
-- `ws://0.0.0.0:9100` - Agent WebSocket endpoint
-- `http://0.0.0.0:9101` - Client REST API + WebSocket
+`--role` 可选 `db / inference / desktop / laptop / display / other`。参数也可以写进 `agent.json` 或用环境变量，优先级 **CLI > env > agent.json > 默认**；`python main.py --print-config` 会逐项打印当前值**以及它是谁给的**。
 
-### 2. Start the Frontend
+**接入需要凭据时**（`HM_INGEST_TOKEN=legacy|strict`，默认档拒掉陌生 id）：在看板"接入"页用管理口令签发一次性配对码，然后
+`python main.py --server ws://<SERVER_IP>:9100 --enroll <码>` 跑一次——身份与节点密钥落进 `identity.json`，之后正常常驻启动即可。
+
+## 界面
+
+| 页 | 回答什么 |
+|---|---|
+| 总览 | 集群健康吗（一盏灯 + `在线 n/m`）· 哪台机器有问题 · 它现在为什么被判定成这样 · 今天这一刻发生了什么（事件流） |
+| 节点详情 | 这台机器的硬件拓扑与 2h/7d/30d 曲线 |
+| 3D 拓扑 | 星型：Server 块在中心、网关在旁、机器成环。每台对每个探测目标各一条边，**边色=链路档**（灰虚线=全丢包或无数据），脉冲快慢≈RTT；块顶色=设备档、底座色=链路档，于是"设备问题还是链路问题"一眼分得开 |
+| 值守屏（`?kiosk`） | 挂在副屏上只负责"看起来是活的、出事了看得出来" |
+| 接入 | 配对码、宽限期内的老 Agent、未带凭据的来源、异常接入台账 |
+| 设置 | 全局阈值与探测计划、逐机阈值覆盖、节点档案（显示名/归属/站点/角色/常驻或临时）、静默 |
+
+四态判级只有一处实现，且每个非 OK 状态都自带**成因**（CPU 高 / 温度高 / 磁盘高 / 失联 / 网关不可达 / NAS 不可达）。"缺席"与"出事"是分开的两件事：长期不上报的常驻机器计入在线率与事件流，但不进集群健康度。
+
+## 自检
+
+改完代码不靠手点，靠这套：
 
 ```bash
-cd client
-npm install
-npm run dev
+cd server && for f in scripts/selftest-*.mjs; do node "$f"; done   # 七套，全部对临时库跑
+cd client && npm run check                                        # token 契约 + 声音契约 + FPS
 ```
 
-Open http://localhost:5173 in your browser.
+它们是可执行的产品契约：任何一条红了就是契约被破坏，不允许"绕过那条断言"。
 
-### 3. Start the Agent (on each monitored host)
+## 诚实边界（不伪装）
 
-```bash
-cd agent
-pip install -r requirements.txt
-python main.py --server ws://<SERVER_IP>:9100
-```
+- **明文局域网，无 TLS。** 配对码、节点密钥、指标都是。节点密钥以 `sha256$盐$散列` 落库、管理口令以 scrypt 落库——**那是散列不是加密**，谁也印不出原值，但线上传输仍是明文。要收口得靠 TLS 或每机一次性握手。
+- **读侧无鉴权**（朋友路过看一眼 = 零摩擦，是需求）；**写侧全部要管理口令**，且只有一处带闸的读（设置页的编辑源，理由写在自检里）。口令失败按来源地址计预算。
+- 真实 IP 与凭据**不进 git、不进日志与异常栈、不进 API 响应、不进分享包**；含地址的文件（`probes.json`/`zt.json`/`identity.json`）一律 gitignored，仓库里只有 `*.example.json`。
+- 演示/模拟节点永远带 `模拟-` / `效果-` 前缀，并且可以一键关掉。
+- 出站告警（微信/邮件）**故意不做**：这台机器的机群满载是正常工作状态，夜半推送等于为人陪编译。
 
-For local testing:
-```bash
-python main.py --server ws://localhost:9100
-```
+## 文档索引（为什么这样设计，都在这些文件里）
 
-### Agent Options
+| 文件 | 是什么 |
+|---|---|
+| `项目阶段性汇报.md` | 对外的一页结论与规划 |
+| `产品设计方案-v1.md` | 产品定位、界面分工、决策记录 |
+| `V2-迭代讨论纪要-20260919.md` | 第二轮迭代的决策升版与排期（S1…S6） |
+| `S1-…S6-细化设计.md` | 每一批的判据、契约、偏差与未验证清单（**§8 是实施后回填的，别看代码猜**） |
+| `技术隐患清单.md` | H1~H25 隐患台账：每条写着"哪一批关掉了哪一半、还剩哪一半" |
+| `部署说明.md` | 231 运维卡、Agent 逐台动作、上线与回滚步骤 |
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--server` | `ws://localhost:9100` | Server WebSocket URL |
-| `--interval` | `2` | Collection interval (seconds) |
-| `--host-id` | auto (hostname) | Custom host identifier |
+## 当前状态与下一步
 
-## Project Structure
-
-```
-host-monitor/
-+-- agent/              Python monitoring agent (deploy on each host)
-|   +-- main.py         Agent entry point
-|   +-- collectors/     Hardware metric collectors (CPU, GPU, RAM, Net)
-|   +-- requirements.txt
-+-- server/             Node.js central relay server
-|   +-- src/index.js    HTTP + WebSocket server
-|   +-- src/store.js    In-memory host data store
-|   +-- package.json
-+-- client/             Vue 3 + Three.js 3D dashboard
-|   +-- src/App.vue     Main interface
-|   +-- src/three/MonitorScene.js   3D scene renderer
-|   +-- src/style.css   Dark theme styles
-|   +-- package.json
-+-- README.md
-```
-
-## Monitored Metrics
-
-- **CPU**: Usage %, core count, frequency, temperature
-- **GPU**: Per-card usage %, VRAM used/total, temperature (NVIDIA via pynvml)
-- **Memory**: Total/used/available, per-stick info (slot, size, frequency)
-- **Network**: Upload/download speed (Mbps), total transferred
-
-## Development Roadmap
-
-- [x] Phase 1: Project scaffolding
-- [x] Phase 2: Python Agent (CPU/GPU/RAM/Net collectors)
-- [x] Phase 3: Node.js relay server
-- [x] Phase 4: 3D frontend visualization (single host demo)
-- [ ] Phase 5: Multi-host expansion & auto-discovery
-- [ ] Phase 6: Historical data & charts
-- [ ] Phase 7: Alert thresholds & notifications
+V2（S1 名册与写侧闸 → S6 设置界面与配置单一真源）**已在本机完成并全绿自检，尚未部署到线上机器**。
+下一步是 V3，候选项按优先级列在 `技术隐患清单.md`：**H22**（一次局部配置写入可让 Server 反复崩溃，建议首批第一条）、**H11**（第三方机器凭据的治理，它是"SSH 拉取"功能的前置闸）、H6 的站点层编辑、H7 的按角色阈值模板。
