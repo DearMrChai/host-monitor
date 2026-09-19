@@ -131,9 +131,12 @@ class DemoFleet {
     if (on) {
       this.spoke.clear()
       for (const s of SCENARIO) {
+        // `silent`: re-staging the props is a mechanism, not a user action, so
+        // it must not put four-plus lines into the event stream on every toggle
+        // (S3 §3 noise discipline; the `demo_on` line carries the fact instead).
         roster.ensure(s.host_id, { hostname: s.hostname, kind: 'demo', role: s.role, confirmed: true })
-        roster.setDisplay(s.host_id, s.display)
-        roster.setClass(s.host_id, s.presence_class, { confirmed: true })
+        roster.setDisplay(s.host_id, s.display, { silent: true })
+        roster.setClass(s.host_id, s.presence_class, { confirmed: true, silent: true })
       }
       this.start()
       console.log(`[Demo] Demo fleet ON (${SCENARIO.length} nodes, 模拟- prefixed)`)
@@ -143,7 +146,7 @@ class DemoFleet {
       // (S1b), keeps stale props off the board, and stops their samples reaching
       // the history DB - while the rows stay queryable under sim-*.
       for (const s of SCENARIO) {
-        if (roster.get(s.host_id)) roster.setClass(s.host_id, 'retired', { confirmed: true })
+        if (roster.get(s.host_id)) roster.setClass(s.host_id, 'retired', { confirmed: true, silent: true })
         this.#requireStore().markDisconnected(s.host_id)
       }
       console.log('[Demo] Demo fleet OFF (nodes retired, generation stopped)')

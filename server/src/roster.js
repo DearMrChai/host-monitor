@@ -21,6 +21,7 @@ import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
 import { existsSync, readFileSync, mkdirSync } from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
+import { record as recordEvent } from './events.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const SERVER_ROOT = path.join(__dirname, '..')
@@ -56,6 +57,19 @@ function historyDbPath() {
 
 function parseSettings(row) {
   try { return JSON.parse(row.settings_json) || {} } catch { return {} }
+}
+
+/**
+ * "23:41" for a mute deadline. Only the *wording* is derived here - the epoch
+ * stays in the event's detail_json, so changing this string never rewrites
+ * history (S3 §2: stored rows are machine facts, rendered text is not).
+ */
+function untilText(until) {
+  if (until === 'today') return '今天结束'
+  const n = Number(until)
+  if (!Number.isFinite(n)) return null
+  const d = new Date(n)
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
 class Roster {
@@ -250,6 +264,10 @@ class Roster {
     this.db.prepare(`
       INSERT INTO enroll_codes (code, created_at, expires_at, max_uses, uses, note, paired_ids)
       VALUES (?,?,?,?,0,?,?)`).run(code, now, now + ttl, cap, String(note || '').slice(0, 60), '')
+    // The audit line carries the tail only, never the code itself: the plaintext
+    // is deliberately held by exactly one response body (S2 §2).
+    recordEvent({ kind: 'roster', code: 'code_issued', hostId: null, level: 'info',
+      detail: { ttl_minutes: Math.round(ttl / 60_000), max_uses: cap, tail: code.slice(-4) } })
     return { code, expires_at: now + ttl, max_uses: cap }
   }
 
@@ -287,13 +305,21 @@ class Roster {
   revokeById(id) {
     const n = Number(id)
     if (!Number.isFinite(n) || n <= 0) return { ok: false, error: 'no such code' }
+    const row = this.db.prepare('SELECT code FROM enroll_codes WHERE rowid = ?').get(n)
     const r = this.db.prepare('DELETE FROM enroll_codes WHERE rowid = ?').run(n)
+    if (r.changes) this.#recordRevoke(row?.code)
     return { ok: r.changes > 0, error: r.changes ? null : 'no such code' }
   }
 
   revokeEnroll(code) {
     const r = this.db.prepare('DELETE FROM enroll_codes WHERE code = ?').run(code)
+    if (r.changes) this.#recordRevoke(code)
     return { ok: r.changes > 0, error: r.changes ? null : 'no such code' }
+  }
+
+  #recordRevoke(code) {
+    recordEvent({ kind: 'roster', code: 'code_revoked', hostId: null, level: 'info',
+      detail: { tail: code ? String(code).slice(-4) : '?' } })
   }
 
   newNodeKey() { return randomBytes(16).toString('hex') }
@@ -350,11 +376,22 @@ class Roster {
 
   // ---------- writes (behind the admin passphrase) ----------
 
-  setClass(hostId, cls, { confirmed = true } = {}) {
+  setClass(hostId, cls, { confirmed = true, silent = false } = {}) {
     if (!CLASSES.includes(cls)) return { ok: false, error: `unknown class: ${cls}` }
     const node = this.cache.get(hostId)
     if (!node) return { ok: false, error: 'no such node' }
-    return { ok: true, node: this.save({ ...node, presence_class: cls, confirmed: confirmed ? 1 : 0 }) }
+    const from = node.presence_class
+    const saved = this.save({ ...node, presence_class: cls, confirmed: confirmed ? 1 : 0 })
+    // Every write here is passphrase-gated and rare, which is exactly what makes
+    // it worth an audit line (S3 §2): "谁把这台机器改成临时的" must be answerable
+    // a day later, when the banner looks wrong and nobody remembers why.
+    // `silent` is for the demo generator re-staging its own props on every
+    // toggle - that is a mechanism, not something a user did (S3 §3).
+    if (!silent) {
+      recordEvent({ kind: 'roster', code: `class_${cls}`, hostId, level: 'info',
+        detail: { from, to: cls } })
+    }
+    return { ok: true, node: saved }
   }
 
   /**
@@ -368,7 +405,10 @@ class Roster {
     const s = parseSettings(node)
     if (until === null) delete s.mute
     else s.mute = { until }
-    return { ok: true, node: this.save({ ...node, settings_json: JSON.stringify(s) }) }
+    const saved = this.save({ ...node, settings_json: JSON.stringify(s) })
+    recordEvent({ kind: 'roster', code: until === null ? 'unmuted' : 'muted', hostId,
+      level: 'info', detail: { until: until === null ? null : until, until_text: untilText(until) } })
+    return { ok: true, node: saved }
   }
 
   mutedUntil(hostId, now = Date.now()) {
@@ -396,12 +436,20 @@ class Roster {
     return [...this.cache.keys()].filter((id) => this.isMuted(id, now))
   }
 
-  setDisplay(hostId, name) {
+  setDisplay(hostId, name, { silent = false } = {}) {
     const node = this.cache.get(hostId)
     if (!node) return { ok: false, error: 'no such node' }
     const clean = String(name || '').trim().slice(0, 40)
     if (!clean) return { ok: false, error: 'empty name' }
-    return { ok: true, node: this.save({ ...node, display_name: clean }) }
+    const from = node.display_name
+    const saved = this.save({ ...node, display_name: clean })
+    // Same `silent` rule as setClass, and the same reason: the demo generator
+    // re-applies its own labels on every toggle (S3 §3).
+    if (!silent && from !== clean) {
+      recordEvent({ kind: 'roster', code: 'renamed', hostId, level: 'info',
+        detail: { from, to: clean } })
+    }
+    return { ok: true, node: saved }
   }
 
   // ---------- meta key/value (admin passphrase, demo preference) ----------
@@ -417,7 +465,16 @@ class Roster {
   }
 
   /** The demo switch is a server-side preference: it must survive a restart. */
-  setDemoEnabled(on) { this.#metaSet('demo_enabled', on ? '1' : '0') }
+  setDemoEnabled(on) {
+    const prev = this.demoEnabledStored()
+    this.#metaSet('demo_enabled', on ? '1' : '0')
+    // Only an actual change is a fleet fact; the endpoint is idempotent and a
+    // re-assert of the current state must not add a line (S3 §3).
+    if (prev !== !!on) {
+      recordEvent({ kind: 'roster', code: on ? 'demo_on' : 'demo_off',
+        hostId: null, level: 'info', detail: {} })
+    }
+  }
   demoEnabledStored() {
     const v = this.#metaGet('demo_enabled')
     return v === null ? null : v === '1'
@@ -436,9 +493,14 @@ class Roster {
     if (this.hasPassphrase() && !this.checkPassphrase(old)) {
       return { ok: false, error: '原口令不正确' }
     }
+    const wasSet = this.hasPassphrase()
     const salt = randomBytes(16).toString('hex')
     const hash = scryptSync(next, salt, 64).toString('hex')
     this.#metaSet('admin_pass', `scrypt$${salt}$${hash}`)
+    // The fact "the admin passphrase changed" belongs in the audit stream; the
+    // passphrase itself never goes anywhere near it (S3 §5, H11's transition rule).
+    recordEvent({ kind: 'roster', code: 'passphrase_changed', hostId: null,
+      level: 'warn', detail: { was_set: wasSet } })
     return { ok: true }
   }
 

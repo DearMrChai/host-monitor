@@ -20,6 +20,9 @@ const DEFAULTS = {
   raw_retention_days: 7,
   agg_retention_days: 30,
   chart_points: 96,
+  // S3: the event stream outlives the 24h window it is read through, but it has
+  // no business outliving the raw samples it explains.
+  event_retention_days: 7,
 }
 
 function loadConfig() {
@@ -98,6 +101,11 @@ class History {
     `)
 
     this.lastSampleAt = new Map()
+    /* S3: retention is one clock, not four. The event stream lives in this file
+       and ages out on this same sweep; modules that own tables here register a
+       hook instead of running their own timer (and instead of importing this
+       module, which would make `roster -> events -> history -> roster` a cycle). */
+    this.cleanupHooks = []
 
     this.rollAndCleanup() // catch up after downtime
     this.rollTimer = setInterval(() => this.rollAndCleanup(), 3_600_000)
@@ -168,6 +176,12 @@ class History {
 
   // ---------- roll + retention ----------
 
+  /** S3: register a `(db, nowMs) => void` sweep run right after sample retention. */
+  onCleanup(fn) {
+    if (!this.enabled) return
+    this.cleanupHooks.push(fn)
+  }
+
   /** Aggregate complete, not-yet-rolled raw minutes into samples_1m; drop expired rows. */
   rollAndCleanup() {
     if (!this.enabled) return
@@ -226,6 +240,11 @@ class History {
       .run(aggCut)
     if (d1.changes || d2.changes) {
       console.log(`[History] retention: -${d1.changes} raw, -${d2.changes} 1m rows`)
+    }
+    for (const fn of this.cleanupHooks) {
+      try { fn(this.db, now) } catch (err) {
+        console.error('[History] cleanup hook failed:', err.message)
+      }
     }
   }
 

@@ -50,10 +50,17 @@ export function evaluateHost(host) {
     // S1 §3.2: an ephemeral node leaving the fleet is a *presence* fact, not an
     // incident. Same OFFLINE level (grey card), but no reason => nothing ever
     // enters the alert engine, banner or sound, and evaluateCluster ignores it.
-    const absent = host.presence_class === 'ephemeral';
+    // S3 §4.2 extends the same mechanism to a **roster-derived absence** (a
+    // persistent node that has not reported since this Server started): it belongs
+    // to the denominator and to the event stream, but "it is not here" must not
+    // pin the top banner grey or start the looping sound - that would trade the
+    // H1 fix for H12 through the back door. A node that *was* here and dropped
+    // still takes the plain OFFLINE path below, unchanged.
+    const absent = host.presence_class === 'ephemeral' || host.absent_record === true;
     return {
       level: 'OFFLINE',
       absent,
+      absent_record: !!host.absent_record,
       components,
       reasons: absent ? [] : [{
         metric: 'offline', source: 'heartbeat', value: offlineSec,
@@ -177,6 +184,10 @@ export function evaluateCluster(hosts) {
   const levelForHealth = (h) => {
     const s = h.status;
     if (!s) return null;
+    // S3 §4.2: a roster-derived absence is not a health state. It still counts
+    // in `online/total` right below - "3 台常驻，现在在 1 台" is the honest
+    // answer - it just does not get to decide what colour the banner is.
+    if (h.absent_record) return null;
     if (s.muted && h.online) return null;
     return s.level;
   };

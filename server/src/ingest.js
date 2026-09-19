@@ -23,6 +23,7 @@
  * actually buys is the H8 property: nobody outside the roster can invent a node.
  */
 import { roster } from './roster.js'
+import { record as recordEvent } from './events.js'
 
 export const INGEST_MODES = ['off', 'legacy', 'strict']
 
@@ -93,6 +94,10 @@ class IngestGate {
       const c = roster.consumeEnroll(token, hostId, now)
       if (c.ok) {
         this.counts.paired += 1
+        // The pairing itself is a fleet fact worth keeping after a restart
+        // (S3 §2: the 24h stream answers "who joined since yesterday").
+        recordEvent({ kind: 'ingest', code: 'paired', hostId, level: 'info',
+          detail: { remaining: c.remaining ?? null, addr: maskAddr(addr) } })
         console.log(`[Ingest] Paired ${hostId} via code (remaining: ${c.remaining ?? '∞'})`)
         return { ok: true, paired: true, node_key: roster.newNodeKey() }
       }
@@ -110,6 +115,11 @@ class IngestGate {
     // 3) legacy grace: already in the roster, no credential. Counted and shown.
     if (this.mode === 'legacy' && roster.get(hostId)) {
       this.counts.accepted_legacy += 1
+      // Repeated reconnects merge into one counted line (S3 §3.2): during the
+      // migration window this is "3 v1 Agents are still writing tokenlessly",
+      // not a wall of rows.
+      recordEvent({ kind: 'ingest', code: 'legacy_accept', hostId, level: 'warn',
+        detail: { addr: maskAddr(addr) } })
       return { ok: true, legacy: true, ...this.#drift(hostId, fingerprint, addr, now) }
     }
 
@@ -147,6 +157,12 @@ class IngestGate {
     if (!accepted) this.counts.denied += 1
     this.events.unshift({ ts: now, addr: addr || null, host_id: hostId || null, reason, accepted: !!accepted })
     if (this.events.length > EVENTS_MAX) this.events.length = EVENTS_MAX
+    // Durable twin of the in-memory ring (H15): the ring still serves the
+    // pairing page's "this boot" view, this is what the 24h stream reads.
+    // `accepted` is only ever true for fingerprint_drift today, so the two
+    // codes below cover every path through this function.
+    recordEvent({ kind: 'ingest', code: accepted ? 'drift' : 'refused', hostId,
+      level: 'warn', detail: { reason, addr: maskAddr(addr) } })
     if (!accepted) console.log(`[Ingest] REFUSED ${hostId || '(no id)'} from ${addr || '?'}: ${reason}`)
     return { ok: false, reason }
   }

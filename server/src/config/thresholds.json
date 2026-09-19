@@ -12,5 +12,9 @@
     "resolved_keep_minutes": 5,
     "history_capacity": 200,
     "tick_ms": 1800
+  },
+  "presence": {
+    "enabled": true,
+    "absent_after_minutes": 3
   }
 }

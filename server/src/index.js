@@ -20,8 +20,9 @@ import { evaluateCluster } from './status.js';
 import { history } from './history.js';
 import { alertEngine } from './alerts.js';
 import { roster, CLASSES } from './roster.js';
-import { ingest } from './ingest.js';
+import { ingest, REASON_TEXT } from './ingest.js';
 import { demoFleet } from './demo.js';
+import * as events from './events.js';
 
 // Overridable so the self-test can run a throwaway Server beside a live one.
 const AGENT_PORT = Number(process.env.HM_AGENT_PORT) || 9100;
@@ -41,6 +42,15 @@ try {
 
 // P5: replay persisted active alerts so a restart doesn't lose them (design §7).
 alertEngine.restoreActive(history.activeAlertRows());
+
+// S3 §2/§5: the durable event stream lives in the history DB, and it renders
+// names through the roster - both are wired here rather than imported by
+// events.js, so a self-test that builds a Roster cannot drag the production
+// history file along with it. Nothing records until this call succeeds.
+events.attach(history, {
+  nameOf: (id) => roster.get(id)?.display_name || id,
+  reasonText: (reason) => REASON_TEXT[reason] || reason,
+});
 
 // S2 §5: the demo fleet writes straight into the store; it is off unless it was
 // switched on before (roster meta) or explicitly pre-armed with HM_DEMO=1.
@@ -158,6 +168,18 @@ app.get('/api/history/:hostId', (req, res) => {
 // P5: full alert lifecycle log (memory list keeps only the 5-min fold window)
 app.get('/api/alerts/history', (req, res) => {
   res.json({ alerts: history.alertHistory(Number(req.query.limit) || 200) });
+});
+
+// S3 §5: "what changed in this fleet in the last 24 hours" - the durable answer
+// behind H12/H15/H17. Read side stays unauthenticated (revised decision 6: read
+// open, write behind the passphrase). Contract: no token, no passphrase, no
+// fingerprint value and no full peer address leaves this endpoint.
+app.get('/api/events', (req, res) => {
+  res.json(events.read({
+    window: req.query.window,
+    hostId: req.query.host || null,
+    limit: Number(req.query.limit) || undefined,
+  }));
 });
 
 app.get('/api/health', (req, res) => {
