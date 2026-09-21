@@ -534,15 +534,49 @@ clientServer.listen(CLIENT_PORT, '0.0.0.0', () => {
   console.log(`[Server] Client HTTP + WS listening on http://0.0.0.0:${CLIENT_PORT}`);
 });
 
+/* H22: one evaluation failure must not take the monitoring Server down.
+ * One round of the snapshot runs the whole chain - roster annotation, the
+ * four-state evaluator, the presence events and `alerts.tick` - and it is
+ * reached from two places that are *not* inside express's try/catch: the
+ * broadcast interval and the client WS connection callback (a browser refresh
+ * is enough). An exception out of either is an uncaught error, which kills the
+ * process; on 231 the scheduled task relaunches it in 5s and it dies again on
+ * the first tick, with the bad value already in the DB - i.e. a monitor that
+ * cannot monitor, and no message anywhere a passing human would see.
+ * So: catch, say it out loud (console + the durable event stream, which is where
+ * an operator looks), and skip this round. Clients keep their last good
+ * snapshot rather than being shown a blank panel. The same table then still has
+ * to be fixed at the source - see `validateThresholds` (write side) and
+ * `levelFor` (judge side); this guard is the floor, not the repair. */
+function snapshotOrNone(where) {
+  try {
+    return store.getSnapshot();
+  } catch (err) {
+    const message = String(err?.message || err).slice(0, 200);
+    console.error(`[Server] 评估器异常（${where}），本轮快照跳过：`, message);
+    try {
+      // Repeats merge inside events.merge_seconds, so a broken frame yields one
+      // counted line per minute, not thirty (S3 §3.2 noise discipline).
+      events.record({ kind: 'system', code: 'evaluator_error', hostId: null,
+        level: 'crit', detail: { where, message } });
+    } catch { /* the event stream must not become a second crash path */ }
+    return null;
+  }
+}
+
 clientWss.on('connection', (ws) => {
   console.log('[Server] Client (frontend) connected');
-  ws.send(JSON.stringify(store.getSnapshot()));
+  // H22: this callback runs the evaluator too, and it is reachable from outside
+  // (any browser refresh). Same guard as the broadcast tick below.
+  const snapshot = snapshotOrNone('client-connect');
+  if (snapshot) ws.send(JSON.stringify(snapshot));
   ws.on('close', () => console.log('[Server] Client disconnected'));
 });
 
 // Periodic broadcast (also the P5 persistence sampling point - design §3)
 setInterval(() => {
-  const snapshot = store.getSnapshot();
+  const snapshot = snapshotOrNone('broadcast');
+  if (!snapshot) return;
   history.onBroadcast(snapshot.hosts);
   const payload = JSON.stringify(snapshot);
   for (const client of clientWss.clients) {

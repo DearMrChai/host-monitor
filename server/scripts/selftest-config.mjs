@@ -546,6 +546,242 @@ const G0 = Date.now()
     live && !('frozen' in live) && !('frozen_since' in live), JSON.stringify(live))
 }
 
+/* ---------- H. H22：一次"只改一项"的阈值写入不许把 Server 打死 ---------- */
+/* Three halves, all load-bearing:
+   ① config:  a table with holes in it is refused, by name, on the write side.
+   ② status:  a table that ALREADY has holes is judged as "that line is not
+              judged" - a row written before ① existed is still sitting in
+              somebody's DB, and boot does not re-validate it (`loadFromStore`
+              replaces into the live object as-is), so ① alone would not save an
+              installed system. That is what H8-H10 assert, in a fresh process.
+   ③ index:   a throw anywhere in the evaluation chain costs one skipped round
+              instead of the process - on BOTH entries: the 2s broadcast tick and
+              the client WS connection callback. A browser refresh reaches the
+              second one, so guarding only the timer leaves the crash live; that
+              is the 09-20 ledger correction, and H11/H12 assert the two entries
+              separately.
+   正对照（拿掉哪一行 → 红哪条；这一节测的是不是空气只看这里）：
+     · 拿掉 status.js `levelFor()` 里的 `if (!th) return null`
+         -> H5/H5b 红（缺阈值直接抛）。子进程段一起红：H9 读到的是 500（评估器
+            在抛），H10 的"事件流里没有 evaluator_error"变成"有一条"——那正是③在
+            兜②的漏，不是②在干活。H11-H14 仍绿，它们测的是③，不是②。
+     · 拿掉 index.js `snapshotOrNone()` 的 try/catch
+         -> H11 红，且子进程当场死掉（H12/H13 的存活断言一起红）。
+     · 只留广播那一拍的护栏、把 `clientWss.on('connection')` 改回裸 `store.getSnapshot()`
+         -> H12 红（浏览器一接入就死），H6b 的结构断言同时红。 */
+const SPEC_METRICS = (config.snapshot().spec.metrics || []).map((m) => m.key)
+{
+  const beforeObj = JSON.stringify(config.thresholds)
+  const beforeRow = roster.getSetting('thresholds')
+  const r = config.setThresholds({ mem: { warn: 70, crit: 90 } })
+  const errs = (r.errors || []).join(' | ')
+  const named = (errs.match(/缺 ([^（|]*)/) || ['', ''])[1].split('、').filter(Boolean)
+  ok('H1 只带 {mem:{…}} 的写入被拒，live thresholds 与 DB 行都一字节没动（H22 的真实复现路径）',
+    r.ok === false && JSON.stringify(config.thresholds) === beforeObj
+    && roster.getSetting('thresholds') === beforeRow, errs.slice(0, 130))
+  ok('H2 拒绝理由把每个缺的键都点出来（"格式错误"答不了"我漏了哪几行"），且没把带来的那项算成缺',
+    SPEC_METRICS.length > 1 && named.length === SPEC_METRICS.length - 1
+    && SPEC_METRICS.filter((k) => k !== 'mem').every((k) => named.includes(k))
+    && !named.includes('mem'), `缺 ${named.join('、')}`)
+  const s = config.setThresholds({ offline_seconds: 15 })
+  ok('H3 只带一个标量的写入同样被拒（{offline_seconds:15} 是另一条真实路径，不是 {mem_usage:…}）',
+    s.ok === false && SPEC_METRICS.every((k) => (s.errors || []).join(' ').includes(k))
+    && JSON.stringify(config.thresholds) === beforeObj)
+  const full = config.setThresholds(SEED)
+  const back = config.resetThresholdsToSeed()
+  ok('H4 整张表仍是正路：出厂表自身过全覆盖校验，"回落播种值"没被这条收紧关在门外',
+    full.ok === true && back.ok === true
+    && JSON.stringify(config.thresholds.cpu_usage) === JSON.stringify(SEED.cpu_usage))
+}
+{
+  /* ② judged with the hole put in by hand. After ① no write path can create one,
+     which is exactly why it has to be put in by hand here: the state still
+     exists in every DB written by the pre-fix code, and boot re-reads those. */
+  const savedOrder = Object.entries(config.thresholds)
+  const savedMem = { ...config.thresholds.mem }
+  delete config.thresholds.mem
+  let out = null
+  let threw = null
+  try {
+    out = evaluateHost({
+      host_id: 'h5-box', hostname: 'h5-box', online: true, lastSeen: Date.now(),
+      metrics: { cpu: { usage_percent: 88, temperature_c: 50 }, memory: { percent: 99 },
+        disk: { partitions: [] }, gpu: [], probes: { results: [] } },
+    })
+  } catch (e) { threw = String(e?.message || e) }
+  // Restore the way `replaceInto` does: rebuild in the original key order, or a
+  // "restored" object that re-serialized to a reordered DB row would be a lie.
+  for (const k of Object.keys(config.thresholds)) delete config.thresholds[k]
+  for (const [k, v] of savedOrder) config.thresholds[k] = v
+  ok('H5 阈值缺失时 levelFor 返回 null 且不抛（"没有这一档"= 不判这一档）',
+    !threw && out?.components?.mem?.level === null, threw || JSON.stringify(out?.components?.mem))
+  ok('H5b 缺一条阈值既不等于永远红、也不等于整台不判：读数还在、CPU 照判 WARN、mem 不进成因行',
+    out?.components?.mem?.percent === 99 && out?.components?.cpu?.level === 'WARN'
+    && out?.level === 'WARN' && !(out?.reasons || []).some((x) => x.metric === 'mem'),
+    JSON.stringify(out && { l: out.level, r: (out.reasons || []).map((x) => x.metric) }))
+  ok('H5c 这一节自己不留脏状态：改坏的 live thresholds 复原到逐字节相同（含键序，且 mem 值没被借引用改掉）',
+    JSON.stringify(config.thresholds) === JSON.stringify(Object.fromEntries(savedOrder))
+    && JSON.stringify(config.thresholds.mem) === JSON.stringify(savedMem)
+    && JSON.stringify(config.thresholds) === JSON.stringify(SEED))
+}
+{
+  // ③ 的配套：入口覆盖 + 新 kind 在界面上有一格归置它。
+  const idx = readFileSync(path.join(SERVER, 'src', 'index.js'), 'utf8')
+  const ev = readFileSync(path.join(SERVER, 'src', 'events.js'), 'utf8')
+  const cli = readFileSync(path.join(SERVER, '..', 'client', 'src', 'lib', 'events.js'), 'utf8')
+  const tabs = (cli.match(/KIND_TABS\s*=\s*\[([\s\S]*?)\]/) || ['', ''])[1]
+  const timer = (idx.match(/setInterval\(\(\) => \{([\s\S]*?)\}, BROADCAST_INTERVAL_MS\)/) || ['', ''])[1]
+  const conn = (idx.match(/clientWss\.on\('connection', \(ws\) => \{([\s\S]*?)\n\}\);/) || ['', ''])[1]
+  const guardFn = (idx.match(/function snapshotOrNone[\s\S]*?\n\}/) || ['', ''])[0]
+  const outside = idx.replace(/function snapshotOrNone[\s\S]*?\n\}/, '')
+  ok('H6 新 kind 两侧都登记了：服务端记 system/evaluator_error，客户端 KIND_TABS 有 system 这一格',
+    /kind:\s*'system'/.test(idx) && /code:\s*'evaluator_error'/.test(idx)
+    && /key:\s*'system',\s*label:\s*'[^']+/.test(tabs),
+    `${(tabs.match(/key:/g) || []).length} 个 tab`)
+  ok('H6b 两条入口各自走 snapshotOrNone，且护栏外只剩一处 getSnapshot（在 express 路由里，抛了是 500 不是死进程）',
+    /snapshotOrNone\(/.test(timer) && !/store\.getSnapshot\(\)/.test(timer)
+    && /snapshotOrNone\(/.test(conn) && !/store\.getSnapshot\(\)/.test(conn)
+    && /try \{[\s\S]{0,60}return store\.getSnapshot\(\)/.test(guardFn)
+    && (outside.match(/store\.getSnapshot\(\)/g) || []).length === 1
+    && /app\.get\('\/api\/alerts'[\s\S]{0,160}store\.getSnapshot\(\)/.test(outside),
+    `${(outside.match(/store\.getSnapshot\(\)/g) || []).length} 处裸调用（护栏函数自身除外）`)
+  ok('H6c 那条事件在 events.js 里有自己的中文行（不是把 JS 异常栈印给人看）',
+    /case 'evaluator_error':[\s\S]{0,240}评估器异常/.test(ev))
+}
+
+/* ---------- H8~H14: the same two holes, seen from a real process ---------- */
+const PORTS_H = { AGENT: 9322, CLIENT: 9323 }
+const REST_H = `http://127.0.0.1:${PORTS_H.CLIENT}`
+/** A frame this Server cannot evaluate: `partitions: [null, null]` makes the
+ *  disk reduce in status.js throw. Deliberately NOT a thresholds-shaped poison -
+ *  ① now refuses a partial table over any API, so the only way to reach "the
+ *  evaluation chain threw" from outside is a bad frame. ③ guards the chain, not
+ *  one field of it, and this is the assertion that keeps that honest. */
+const poisonFrame = (hostId) => JSON.stringify({
+  type: 'metrics', host_id: hostId, timestamp: Date.now(),
+  cpu: { usage_percent: 92, cores: 8, temperature_c: 50 }, memory: { percent: 40 },
+  disk: { partitions: [null, null] }, gpu: [], probes: { results: [] },
+})
+const eventsH = async (code = null) => {
+  const j = await getH('/api/events?window=24h&limit=400')
+  return ((j || {}).events || []).filter((e) => !code || e.code === code)
+}
+const hostsH = async () => ((await getH('/api/hosts')) || {}).hosts || []
+/* Fail-soft on purpose: when the guard under test is missing, the evaluation
+   chain throws and those two routes answer 500 (express catches it - which is
+   also why they are not the crash path). A test that died on the fetch would
+   report one collapsed FAIL; reporting `[]` keeps each assertion its own line,
+   and `httpErr` says why. */
+let httpErr = ''
+async function getH(p) {
+  try {
+    const r = await fetch(`${REST_H}${p}`)
+    if (!r.ok) { httpErr = `${p} -> HTTP ${r.status}`; return null }
+    return await r.json()
+  } catch (e) { httpErr = `${p} -> ${String(e?.message || e)}`; return null }
+}
+const openAgentH = (hostId) => new Promise((resolve, reject) => {
+  const w = new WebSocket(`ws://127.0.0.1:${PORTS_H.AGENT}`)
+  const t = setTimeout(() => reject(new Error('agent timeout')), 8000)
+  w.on('open', () => w.send(JSON.stringify({
+    type: 'register', host_id: hostId, hostname: hostId, platform: 'selftest',
+  })))
+  w.on('message', (raw) => {
+    const m = JSON.parse(raw.toString())
+    if (m.type !== 'registered') return
+    clearTimeout(t); resolve(w)
+  })
+  w.on('error', (e) => { clearTimeout(t); reject(e) })
+})
+{
+  /* The row is written straight through the roster because after ① there is no
+     API left that would put it there - and that is the point: this is what a DB
+     written by the pre-fix code looks like to a Server booted with the fix.
+     Both CPU lines go, so `components.cpu` has nothing left to judge and its
+     level is the observable (`null`) instead of a debounce-dependent colour. */
+  const corrupt = { ...SEED }
+  delete corrupt.cpu_usage
+  delete corrupt.cpu_temp
+  roster.setSetting('thresholds', JSON.stringify(corrupt))
+  let child = null
+  let agent = null
+  let cli = null
+  const stderr = []
+  try {
+    child = spawn(process.execPath, [path.join(SERVER, 'src', 'index.js')], {
+      cwd: SERVER, stdio: ['ignore', 'ignore', 'pipe'],
+      env: { ...process.env, HISTORY_CONFIG: CFG, HM_ROSTER_DB: ROSTER_DB, HM_DEMO: '0',
+        HM_AGENT_PORT: String(PORTS_H.AGENT), HM_CLIENT_PORT: String(PORTS_H.CLIENT),
+        HM_INGEST_TOKEN: 'off' },
+    })
+    child.stderr.on('data', (d) => stderr.push(String(d)))
+    let up = false
+    for (let i = 0; i < 100 && !up; i++) {
+      try { up = (await fetch(`${REST_H}/api/health`)).ok } catch { /* not yet */ }
+      if (!up) await sleep(200)
+    }
+    ok('H8 带着"缺 cpu_usage / cpu_temp"的旧 DB 行也起得来（坏值落库 + 5 秒拉起那一格的前半）', up)
+    agent = await openAgentH('h22-box')
+    agent.send(metricsFrame('h22-box', 99))
+    await sleep(4_500)  // ≥2 broadcast ticks with the hole in place
+    httpErr = ''
+    const box = (await hostsH()).find((h) => h.host_id === 'h22-box')
+    ok('H9 新进程里缺的那两条就是不判：cpu.level=null、99% 的读数还在、卡片不因自己的配置洞变红',
+      box?.status?.components?.cpu?.level === null
+      && box?.status?.components?.cpu?.usage === 99 && box?.status?.level === 'OK'
+      && SEED.cpu_usage.crit === 95   // 判得动的话 99 早就 CRIT 了：这条断言的前提
+      && !(box?.status?.reasons || []).some((x) => x.metric === 'cpu_usage' || x.metric === 'cpu_temp'),
+      `${JSON.stringify(box?.status && { l: box.status.level, cpu: box.status.components?.cpu })} ${httpErr}`)
+    ok('H10 这一路压根没抛：事件流里没有 evaluator_error、进程活着（是②挡住的，不是③兜住的）',
+      (await eventsH('evaluator_error')).length === 0 && child.exitCode === null,
+      `${httpErr} ${stderr.join('').slice(0, 120)}`)
+
+    agent.send(poisonFrame('h22-box'))
+    await sleep(4_500)  // every broadcast tick throws here
+    const evs = await eventsH('evaluator_error')
+    ok('H11 周期广播这条入口真抛了：进程活着 + 落成一条 system/evaluator_error（点名"周期广播"）',
+      child.exitCode === null && evs.length === 1 && evs[0].kind === 'system'
+      && evs[0].detail?.where === 'broadcast' && (evs[0].count || 1) >= 2
+      && /评估器异常已拦截/.test(evs[0].text) && /周期广播/.test(evs[0].text),
+      JSON.stringify(evs[0] || null).slice(0, 240))
+
+    /* A browser refreshing the page is the second entry, and it is the one the
+       09-20 ledger correction was about: with only the broadcast tick guarded
+       this kills the Server the moment someone opens the board. */
+    cli = new WebSocket(REST_H.replace(/^http/, 'ws'))
+    const whileBroken = await Promise.race([
+      new Promise((res) => { cli.onmessage = (e) => res(String(e.data)) }),
+      sleep(2_500).then(() => null),
+    ])
+    ok('H12 浏览器接入这一条入口也包住了：接入即抛、进程仍然活着、这一拍只是没快照',
+      whileBroken === null && child.exitCode === null, stderr.join('').slice(-140))
+
+    const mid = (await eventsH('evaluator_error'))[0]
+    agent.send(metricsFrame('h22-box', 92))  // a good frame overwrites the bad one
+    const after = await Promise.race([
+      new Promise((res) => { cli.onmessage = (e) => res(String(e.data)) }),
+      sleep(4_500).then(() => null),
+    ])
+    ok('H13 恢复是自动的：坏帧被下一个好帧盖掉，同一个 socket 就重新收到快照（跳拍不是拉闸）',
+      !!after && JSON.parse(after).type === 'snapshot' && child.exitCode === null)
+    const end = await eventsH('evaluator_error')
+    ok('H14 每 2 秒一次的失败合成一行并计数（噪声纪律：一行 ×N，不是一分钟 30 行）',
+      end.length === 1 && end[0].first_ts === mid?.first_ts && (end[0].count || 1) >= 3
+      && /Server 继续运行|本轮快照跳过/.test(end[0].text),
+      JSON.stringify(end[0] && { c: end[0].count, w: end[0].detail?.where }))
+  } catch (e) {
+    ok('H8~H14 子进程段整体跑通', false, String(e?.message || e))
+  } finally {
+    try { cli?.close() } catch { /* best effort */ }
+    try { agent?.close() } catch { /* best effort */ }
+    child?.kill()
+    await sleep(500)
+    // Leave the throwaway DB with a complete table again, for whoever reruns a
+    // section by hand: a corrupt row here would look like a new bug.
+    config.setThresholds(SEED)
+  }
+}
+
 history.db?.close?.()
 roster.db?.close?.()
 events.detach()

@@ -20,8 +20,23 @@ export function worstLevel(...levels) {
   return worst;
 }
 
+/**
+ * One metric against one threshold pair.
+ *
+ * H22: `th` can legitimately be absent - a thresholds table written before this
+ * guard existed (the DB row is not re-validated on boot), or a caller that
+ * reached the store directly. Dereferencing `th.crit` on `undefined` used to throw
+ * inside the broadcast timer and take the whole Server down, so a missing
+ * threshold now yields `null`, meaning "this metric is not judged".
+ * That is a third state and not a fake one: it is neither "always red" (which
+ * would be an alarm about our own config) nor a crash, and `worstLevel` skips
+ * nulls so the rest of the card still gets judged. The write side
+ * (`config.validateThresholds`) refuses an incomplete table; this guard is what
+ * keeps an already-stored incomplete table from being fatal.
+ */
 function levelFor(value, th) {
   if (value == null || Number.isNaN(value)) return null;
+  if (!th) return null;
   if (value > th.crit) return 'CRIT';
   if (value > th.warn) return 'WARN';
   return 'OK';

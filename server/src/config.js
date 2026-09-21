@@ -101,12 +101,23 @@ function numberAt(pathKey, spec, src, errors, label = pathKey) {
  * Validate a full candidate threshold object. Mutates `next` to normalized
  * numbers (so "80" from an <input> becomes 80) and returns the list of reasons
  * it should be refused - empty list means accepted.
+ *
+ * H22: **every metric pair is mandatory here**, because `setThresholds` is a
+ * whole-table replacement and `replaceInto` deletes whatever the candidate does
+ * not mention. A candidate missing `cpu_usage` therefore does not "leave CPU
+ * alone" - it removes the CPU red line from the live object *and from the DB
+ * row*, and the next frame used to dereference `th.crit` on `undefined` on a
+ * bare timer (that is how one POST killed the Server, repeatedly, with the bad
+ * value persisted). So a partial table is refused by name, not repaired and not
+ * accepted: "which rows did you not send" is a question the caller can answer,
+ * and silence about it is what made the failure invisible in the first place.
  */
 export function validateThresholds(next) {
   const errors = [];
+  const missing = [];
   for (const [key, range] of Object.entries(METRICS)) {
     const pair = next[key];
-    if (pair === undefined) continue;
+    if (pair === undefined) { missing.push(key); continue; }
     if (typeof pair !== 'object' || pair === null) { errors.push(`${key} 需要 {{warn, crit}}`); continue; }
     // `src` here is the pair itself, so the path is one segment and the full
     // name only travels as the label. Passing `${key}.${side}` instead made
@@ -120,6 +131,12 @@ export function validateThresholds(next) {
     if (Number.isFinite(w) && Number.isFinite(c) && c < w) {
       errors.push(`${key}：严重档不能低于警告档`);
     }
+  }
+  // Named first: a caller that sent one row needs to be told *which rows it did
+  // not send*, and "格式错误" answers the wrong question.
+  if (missing.length) {
+    errors.push(`阈值表必须整张提交，缺 ${missing.join('、')}`
+      + '（少一项就是删掉那一项，不提交等于取消那条红线）');
   }
   for (const [key, spec] of Object.entries(SCALARS)) numberAt(key, spec, next, errors);
   if (next.presence && typeof next.presence.enabled !== 'boolean' && next.presence.enabled !== undefined) {
@@ -223,7 +240,9 @@ export function subscribe(fn) {
 
 /* ---------- writes ---------- */
 
-/** Full replacement of the global thresholds (the settings UI sends the whole table). */
+/** Full replacement of the global thresholds. The settings UI sends the whole
+ *  table, and `validateThresholds` now *requires* it (H22) - a candidate that
+ *  omits a metric is refused instead of silently deleting that metric's line. */
 export function setThresholds(next) {
   const candidate = JSON.parse(JSON.stringify(next || {}));
   const errors = validateThresholds(candidate);

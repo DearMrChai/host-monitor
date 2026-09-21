@@ -88,6 +88,18 @@ const CANCELLED_TEXT = {
   absent: '改判缺席',
 }
 
+/** Which evaluation entry raised (H22) - the two call sites index.js guards.
+ *  An unknown token renders as itself, so a third entry added later still says
+ *  something true instead of falling back to a wrong sentence - and the lookup
+ *  is own-property only, because `detail_json` is read back off the disk and
+ *  `EVAL_WHERE_TEXT['constructor']` would otherwise print a function. */
+const EVAL_WHERE_TEXT = {
+  broadcast: '周期广播',
+  'client-connect': '客户端接入',
+}
+const evalWhereText = (w) => (typeof w === 'string' && Object.hasOwn(EVAL_WHERE_TEXT, w)
+  ? EVAL_WHERE_TEXT[w] : (w || '未注明入口'))
+
 export function attach(history, bind = {}) {
   if (!history?.enabled || !history.db) {
     console.log('[Events] history unavailable -> event stream not persisted')
@@ -251,6 +263,9 @@ function render(row, detail) {
     case 'passphrase_changed': return `管理口令已${detail.was_set ? '更换' : '设置'}`
     case 'demo_on': return `演示机群已开启（道具节点带「模拟-」前缀）`
     case 'demo_off': return `演示机群已关闭（道具节点退役，告警按「已退役」闭合）`
+    // H22: the monitor reporting on itself. Deliberately not prefixed with a
+    // node name - the failing thing is this Server, not a machine in the fleet.
+    case 'evaluator_error': return `评估器异常已拦截（${evalWhereText(detail.where)}）：${detail.message || '原因未知'}；本轮快照跳过，Server 继续运行`
     default: return detail.text || row.code
   }
 }

@@ -23,6 +23,10 @@ export const KIND_TABS = [
   { key: 'presence', label: '在场' },
   { key: 'ingest', label: '接入' },
   { key: 'roster', label: '名册' },
+  // H22: the Server's own failures (`evaluator_error`). A kind the server records
+  // but this list does not name is a row that only shows under 全部 - which is how
+  // "we knew about it" and "anybody could see it" quietly diverge.
+  { key: 'system', label: '系统' },
 ]
 
 export const WINDOWS = ['24h', '7d']
