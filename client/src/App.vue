@@ -235,7 +235,7 @@ onBeforeUnmount(() => {
   background: var(--bg-glass); border: 1px solid var(--border); color: var(--text);
   box-shadow: 0 6px 20px rgba(0,0,0,.12);
 }
-.app-flash.err { border-color: var(--red); color: var(--crit-ink); }
+.app-flash.err { border-color: var(--red); color: var(--red); }
 .flash-enter-active, .flash-leave-active { transition: opacity .25s, transform .25s; }
 .flash-enter-from, .flash-leave-to { opacity: 0; transform: translateX(-50%) translateY(6px); }
 </style>

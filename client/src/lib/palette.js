@@ -19,36 +19,14 @@
  * the DOM has no legend swatch for a liquid.
  */
 
-/** The four states, as the scene sees them (matches `--green/--orange/--red`). */
+/** The four states, as the scene sees them (matches `--green/--orange/--red`).
+ *  On a dark ground these double as the text tones — one family per state, per
+ *  R-2 / 色表 §3: a second set of values per state is what breaks 一色一事实. */
 export const STATE = {
   OK: '#3fb950',
   WARN: '#d29922',
   CRIT: '#f85149',
   OFFLINE: '#9aa0a6',
-}
-
-/** Text-tone pair for each state, for anything drawn into a canvas texture.
- *
- *  V3 暗底色表 §3 asks for this whole family to be **deleted** (R-2: on a dark
- *  ground the face colour is already light enough to read as type, so a second
- *  set of values per state is what breaks 一色一事实). Deleting the names is not
- *  a two-file change: 54 `var(--ok-ink/--warn-ink/--crit-ink)` sites across 14
- *  .vue files have to be re-pointed, and `scripts/check-tokens.mjs:57-59` hard-
- *  requires the INK <-> --*-ink pairing to exist. Both are outside this cut.
- *
- *  What this cut does is honour R-2's substance: the values now **are** the state
- *  faces (§2.3). The paper-era trio (#1a7f37/#9a6700/#b62324) measured CR 3.76 /
- *  3.92 / 2.96 against the new `#0b1015` ground — all under the 4.5 text gate,
- *  i.e. a real legibility regression at every site, not an intermediate state.
- *  So the keys stay (no dangling references) and collapse onto one value each.
- *
- *  Note: these must stay literal '#rrggbb'. check-tokens.mjs scrapes palette.js
- *  with a hex regex, so `ok: STATE.OK` would read as missing and fail the build.
- */
-export const INK = {
-  ok: '#3fb950',
-  warn: '#d29922',
-  crit: '#f85149',
 }
 
 /** Scene grounds, so a re-skin is one file rather than four scattered literals.
@@ -98,7 +76,7 @@ export const NEUTRAL = {
  *  tiers than anyone can tell apart". x1 vs x4 is carried by trace *width*
  *  (0.10 vs 0.16) — hue says which group, width says which generation.
  *
- *  Like INK, these must stay literal '#rrggbb': check-tokens.mjs scrapes this file
+ *  These must stay literal '#rrggbb': check-tokens.mjs scrapes this file
  *  with a hex regex, so `ddr: STRUCT.ram` would read as missing and fail the build. */
 export const STRUCT = {
   ddr: '#58a6ff',
@@ -139,4 +117,4 @@ export function levelColor(level) {
   return hex == null ? null : toRGB(hex)
 }
 
-export default { STATE, INK, GROUND, NEUTRAL, STRUCT, COOLANT, toRGB, levelColor }
+export default { STATE, GROUND, NEUTRAL, STRUCT, COOLANT, toRGB, levelColor }

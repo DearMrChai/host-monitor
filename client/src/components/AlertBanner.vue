@@ -48,7 +48,7 @@ const more = computed(() => Math.max(0, crits.value.length - 2))
   display: flex; align-items: center; gap: 10px;
   margin: 10px 14px 0; padding: 10px 14px; cursor: pointer;
   background: color-mix(in srgb, var(--red) 10%, transparent); border: 1px solid color-mix(in srgb, var(--red) 50%, transparent);
-  border-radius: 8px; color: var(--crit-ink);
+  border-radius: 8px; color: var(--red);
 }
 .bn-icon { width: 10px; height: 10px; border-radius: 50%; background: var(--red); animation: blink 1s infinite; flex-shrink: 0; }
 .bn-icon.still { animation: none; opacity: .55; }
@@ -62,7 +62,7 @@ const more = computed(() => Math.max(0, crits.value.length - 2))
 .banner-chip {
   position: absolute; top: 12px; right: 14px; z-index: 30;
   font-size: 12px; padding: 4px 10px; cursor: pointer;
-  background: var(--bg-glass); border: 1px solid var(--red); color: var(--crit-ink);
+  background: var(--bg-glass); border: 1px solid var(--red); color: var(--red);
   border-radius: 12px;
 }
 </style>

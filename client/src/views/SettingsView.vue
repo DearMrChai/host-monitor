@@ -476,7 +476,7 @@ onMounted(load)
 <style scoped>
 .settings { height: 100%; overflow: auto; padding: 12px 16px 24px; }
 .sv-gate {
-  font-size: 12px; color: var(--warn-ink); border: 1px dashed var(--orange);
+  font-size: 12px; color: var(--orange); border: 1px dashed var(--orange);
   border-radius: 8px; padding: 7px 10px; margin-bottom: 10px;
 }
 .sv-body {
@@ -517,7 +517,7 @@ onMounted(load)
   font: inherit; font-size: 11px; padding: 3px 10px; border-radius: 12px; cursor: pointer;
   border: 1px solid var(--border); background: var(--bg-glass); color: var(--text2);
 }
-.sv-alt.armed { border-color: var(--red); color: var(--crit-ink); }
+.sv-alt.armed { border-color: var(--red); color: var(--red); }
 .sv-note { font-size: 10px; color: var(--text3); margin: 8px 0 0; }
 .sv-nodes { display: flex; flex-wrap: wrap; gap: 6px; }
 .sv-node {
@@ -531,7 +531,7 @@ onMounted(load)
 .sv-node i { font-style: normal; font-size: 9px; border: 1px dashed var(--text3); border-radius: 5px; padding: 0 3px; color: var(--text3); }
 .sv-meta { display: flex; flex-wrap: wrap; gap: 8px; font-size: 10px; color: var(--text3); margin: 8px 0 2px; }
 .sv-meta code { font-size: 10px; }
-.sv-suspect { color: var(--warn-ink); }
-.sv-muted { color: var(--warn-ink); }
+.sv-suspect { color: var(--orange); }
+.sv-muted { color: var(--orange); }
 .sv-help ul { margin: 0; padding-left: 18px; font-size: 11px; color: var(--text2); line-height: 1.7; }
 </style>

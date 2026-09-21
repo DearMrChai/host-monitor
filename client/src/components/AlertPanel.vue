@@ -86,7 +86,7 @@ function metricText(a) {
   font-size: 11px; background: rgba(0,0,0,.06); border-radius: 9px;
   padding: 0 7px; margin-left: 4px;
 }
-.ap-empty { font-size: 12px; color: var(--ok-ink); padding: 10px 0; }
+.ap-empty { font-size: 12px; color: var(--green); padding: 10px 0; }
 .ap-item {
   display: flex; gap: 8px; padding: 8px; border-radius: 8px; cursor: pointer;
   border: 1px solid transparent;

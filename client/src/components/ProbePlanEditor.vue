@@ -133,5 +133,5 @@ function normPort(t) { if (t && (t.tcp_port === '' || t.tcp_port === undefined))
 .ppe-hint { font-size: 10px; color: var(--text3); }
 .ppe-sites { font-size: 11px; color: var(--text2); display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
 .ppe-sites code { font-size: 10px; padding: 0 5px; border: 1px solid var(--border); border-radius: 6px; }
-.ppe-masked { font-size: 11px; color: var(--warn-ink); margin: 2px 0 0; }
+.ppe-masked { font-size: 11px; color: var(--orange); margin: 2px 0 0; }
 </style>

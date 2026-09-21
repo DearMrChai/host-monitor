@@ -318,9 +318,9 @@ onBeforeUnmount(() => {
   font-size: max(26px, 1.9vw); font-weight: 700; letter-spacing: 1px;
   padding: 2px 16px; border-radius: 8px; border: 2px solid;
 }
-.k-health.ok { color: var(--ok-ink); border-color: var(--green); background: color-mix(in srgb, var(--green) 8%, transparent); }
-.k-health.warn { color: var(--warn-ink); border-color: var(--orange); background: color-mix(in srgb, var(--orange) 10%, transparent); }
-.k-health.crit { color: var(--crit-ink); border-color: var(--red); background: color-mix(in srgb, var(--red) 10%, transparent); }
+.k-health.ok { color: var(--green); border-color: var(--green); background: color-mix(in srgb, var(--green) 8%, transparent); }
+.k-health.warn { color: var(--orange); border-color: var(--orange); background: color-mix(in srgb, var(--orange) 10%, transparent); }
+.k-health.crit { color: var(--red); border-color: var(--red); background: color-mix(in srgb, var(--red) 10%, transparent); }
 .k-health.offline { color: var(--text2); border-color: var(--text3); background: rgba(0,0,0,.04); }
 /* The screen's one DOM animation, spent on what must be noticed from across a
    room. The 3D pulses live inside the scene's own budget (§1.4). */
@@ -337,9 +337,9 @@ onBeforeUnmount(() => {
   font-size: max(16px, 1.05vw); color: var(--text2); white-space: nowrap;
   overflow: hidden; text-overflow: ellipsis; min-width: 0;
 }
-.k-event.warn { color: var(--warn-ink); }
-.k-event.crit, .k-event.offline { color: var(--crit-ink); }
-.k-event.stale { color: var(--warn-ink); }
+.k-event.warn { color: var(--orange); }
+.k-event.crit, .k-event.offline { color: var(--red); }
+.k-event.stale { color: var(--orange); }
 .k-event.none, .k-event.loading { color: var(--text3); }
 .k-spacer { flex: 1; min-width: 8px; }
 .k-sound {
@@ -379,19 +379,19 @@ onBeforeUnmount(() => {
 .k-why {
   position: absolute; left: 16px; bottom: 12px; z-index: 6;
   display: flex; flex-direction: column; gap: 2px;
-  font-size: max(13px, .95vw); color: var(--warn-ink);
+  font-size: max(13px, .95vw); color: var(--orange);
   border: 1px solid var(--orange); border-radius: 8px; padding: 5px 10px;
   background: var(--bg-glass);
 }
 .k-why em { font-style: normal; color: var(--text3); font-size: .85em; }
-.k-why.lost { border-color: var(--red); color: var(--crit-ink); }
+.k-why.lost { border-color: var(--red); color: var(--red); }
 
 .k-stale {
   position: absolute; inset: 0; z-index: 8; display: flex;
   flex-direction: column; align-items: center; gap: 8px; padding-top: 11vh;
   background: rgba(245, 240, 230, .55); text-align: center;
   font-size: max(26px, 1.9vw); font-weight: 700; letter-spacing: 1px;
-  color: var(--crit-ink);
+  color: var(--red);
 }
 .k-stale em { font-style: normal; font-size: .5em; font-weight: 400; color: var(--text2); }
 

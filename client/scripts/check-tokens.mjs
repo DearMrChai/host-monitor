@@ -54,9 +54,6 @@ if (!css) {
     ['STATE', 'OK', 'green', '正常：四态之一'],
     ['STATE', 'WARN', 'orange', '警告：四态之一'],
     ['STATE', 'CRIT', 'red', '严重：四态之一'],
-    ['INK', 'ok', 'ok-ink', '正常的文字档'],
-    ['INK', 'warn', 'warn-ink', '警告的文字档'],
-    ['INK', 'crit', 'crit-ink', '严重的文字档'],
     ['GROUND', 'bg', 'bg', '场景底色 = 页面底色'],
     /* 告警脉冲此前只有 WebGL 一个家（`palette.NEUTRAL.alarm`），DOM 侧没有 token，
        于是墙上那块闪红的文字一直画着两个没进过表的红。最稀缺的通道上反而没闸
@@ -112,9 +109,10 @@ if (!css) {
     const num = (v) => `${v}(?![\\d.])`
     return new RegExp(`rgba?\\(\\s*${num(r)}${sep}${num(g)}${sep}${num(b)}\\s*[^)]*\\)`, 'i')
   }
-  for (const t of ['green', 'orange', 'red', 'alarm', 'accent', 'ok-ink', 'warn-ink', 'crit-ink', 'up', 'down']) {
-    // 同值只留第一个名字（STATE 面色排在 INK 文字档之前），否则 --red 的提示
-    // 会被后写入的 --crit-ink 顶掉：值一致，说哪个都不算错，但指面色更准。
+  for (const t of ['green', 'orange', 'red', 'alarm', 'accent', 'up', 'down']) {
+    // 同值只留先出现的那个名字。这七支今天互不同值（文字档一族按 R-2 删除后，
+    // 原先撑住这条去重的 red/crit-ink 同值情形已经没有了），所以此判据当前是空
+    // 跑的；留着是因为将来任何一支与状态色同值时，提示语该指向面色而不是后写入者。
     if (css[t] && !banned.has(css[t])) banned.set(css[t], `--${t}`)
   }
   const ROOT_RANGE = (() => {

@@ -311,10 +311,10 @@ function pick(item) {
   border: 1px solid var(--border); border-radius: 9px; background: rgba(0,0,0,.03);
 }
 .hc-class { font-size: 10px; padding: 1px 6px; border-radius: 9px; flex-shrink: 0; }
-.hc-class.persistent { color: var(--ok-ink); background: color-mix(in srgb, var(--green) 10%, transparent); }
+.hc-class.persistent { color: var(--green); background: color-mix(in srgb, var(--green) 10%, transparent); }
 .hc-class.ephemeral { color: var(--text2); background: rgba(0,0,0,.05); border: 1px dashed var(--border); }
 .hc-pending {
-  font-size: 10px; color: var(--warn-ink); flex-shrink: 0;
+  font-size: 10px; color: var(--orange); flex-shrink: 0;
   background: color-mix(in srgb, var(--orange) 12%, transparent); border-radius: 9px; padding: 1px 7px;
 }
 .hc-more {
@@ -327,7 +327,7 @@ function pick(item) {
 
 .hc-absent { font-size: 11px; color: var(--text2); }
 .hc-absent em { font-style: normal; color: var(--text3); margin-left: 4px; }
-.hc-muted { font-size: 11px; color: var(--warn-ink); }
+.hc-muted { font-size: 11px; color: var(--orange); }
 
 .hc-link { font-size: 11px; color: var(--text3); display: flex; align-items: center; gap: 6px; }
 .hc-link b { font-weight: 600; }
@@ -363,8 +363,8 @@ function pick(item) {
 .hcs-hint { font-size: 10px; color: var(--text3); }
 .hc-reasons { border-top: 1px dashed var(--border); padding-top: 6px; display: flex; flex-direction: column; gap: 2px; }
 .hcr { font-size: 10px; color: var(--text2); }
-.hcr.warn { color: var(--warn-ink); }
-.hcr.crit { color: var(--crit-ink); }
+.hcr.warn { color: var(--orange); }
+.hcr.crit { color: var(--red); }
 /* A tag, not a suffix inside the sentence: it has to survive the truncation of
    the reason line and read as "about this number", not as part of the value. */
 .hcr-custom {
@@ -384,10 +384,10 @@ function pick(item) {
   border: none; background: none; color: var(--text); border-radius: 7px; padding: 6px 8px;
 }
 .hcm-item:hover { background: rgba(0,0,0,.05); }
-.hcm-item.danger { color: var(--crit-ink); }
+.hcm-item.danger { color: var(--red); }
 .hcm-item.primary { color: var(--accent); font-weight: 600; }
 .hcm-input { font: inherit; font-size: 12px; padding: 5px 7px; border: 1px solid var(--border); border-radius: 7px; }
-.hcm-lock { margin: 2px 8px 4px; font-size: 11px; color: var(--warn-ink); }
+.hcm-lock { margin: 2px 8px 4px; font-size: 11px; color: var(--orange); }
 .hcm-confirm {
   margin: 2px 4px 4px; font-size: 11px; line-height: 1.5; color: var(--text2);
   display: flex; flex-direction: column; gap: 6px;
@@ -395,7 +395,7 @@ function pick(item) {
 .hcm-actions { display: flex; gap: 6px; }
 .hcm-actions button {
   font: inherit; font-size: 11px; padding: 3px 10px; cursor: pointer;
-  border-radius: 11px; border: 1px solid var(--red); background: color-mix(in srgb, var(--red) 10%, transparent); color: var(--crit-ink);
+  border-radius: 11px; border: 1px solid var(--red); background: color-mix(in srgb, var(--red) 10%, transparent); color: var(--red);
 }
 .hcm-actions .ghost { border-color: var(--border); background: none; color: var(--text2); }
 </style>
