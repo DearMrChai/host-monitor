@@ -59,6 +59,22 @@ if (!css) {
     ['INK', 'crit', 'crit-ink', '严重的文字档'],
     ['GROUND', 'bg', 'bg', '场景底色 = 页面底色'],
   ]
+  /* 结构族 12 对 — V3 翻暗第 2 刀（任务书 §6.1/§6.5）。
+     第 1 刀把 §2.5 那族只发在 `:root`，可它的另一个家是 3D 的总线色，而 canvas
+     读不到 CSS 变量、只能读 palette.js —— 于是"图例的紫"和"线的紫"从此可以各改
+     各的，而本脚本一声不响。那正是本文件开头写的 H9 形状，也是它存在的理由，
+     所以这一族必须进成对表而不是留在散文里。键名与 CSS token 名一一对应。
+     两支**有意**不在表内：PCIe×1 不发新色、并入 pcie4（§2.5 补 2，x1/x4 靠线宽
+     0.10/0.16 分档）；COOLANT 是物理对象色（冷却液），DOM 侧没有可对照的图例。 */
+  const STRUCT_MEANING = {
+    ddr: '总线 DDR', pcie16: '总线 PCIe×16', pcie4: '总线 PCIe×4',
+    nvlink: '总线 NVLink', dmi: '总线 DMI', sata: '总线 SATA',
+    cpu: '部件 CPU', ram: '部件内存', gpu: '部件显卡',
+    storage: '部件存储', pch: '部件 PCH', nic: '部件网卡',
+  }
+  for (const [key, what] of Object.entries(STRUCT_MEANING)) {
+    STATE_PAIRS.push(['STRUCT', key, key, `${what}：DOM 图例 ↔ 3D 线色（色表 §2.5）`])
+  }
   for (const [group, key, token, what] of STATE_PAIRS) {
     const pal = paletteGroup(group)
     const a = pal?.[key]

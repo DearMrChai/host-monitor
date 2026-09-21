@@ -90,26 +90,34 @@ const trendSeries = computed(() => {
   const s = props.spec
   if (!h || !TREND_KINDS.includes(s.kind)) return []
   const th = props.thresholds
+  /* 曲线色 = 结构族 §2.6，直接写 CSS 变量字符串即可：消费者 TrendChart.vue:55-58
+     的注释说明 stroke 走 :style 不走 attribute，就是为了让这里能引用 CSS 变量
+     （同文件 color prop 的默认值本来就是 'var(--accent)'）。所以这一处是纯替换，
+     不 import palette、不加新机制。
+     原来这两支是深绿与深橙 —— 跟同一张图里的警告阈值虚线
+     （--orange / --red）共用告警通道，撞 R-1；§2.6 把绿、橙还给告警通道。
+     每张趋势卡只画一条线、各自带标签，所以"占用与温度同色"不成立为问题。
+     丢包那条的 var(--red) 保留不动：它是语义判断不是抄色，已登记为交人眼项。 */
   switch (s.kind) {
     case 'cpu':
       return [
-        { label: 'CPU 占用', unit: '%', vals: h.cpu.usage, ...th.cpu_usage, color: '#2e7d32' },
-        { label: 'CPU 温度', unit: '°C', vals: h.cpu.temp, ...th.cpu_temp, color: '#e65100' },
+        { label: 'CPU 占用', unit: '%', vals: h.cpu.usage, ...th.cpu_usage, color: 'var(--cpu)' },
+        { label: 'CPU 温度', unit: '°C', vals: h.cpu.temp, ...th.cpu_temp, color: 'var(--cpu)' },
       ]
     case 'gpu': {
       const g = h.gpu?.[s.index]
       if (!g) return []
       return [
-        { label: 'GPU 占用', unit: '%', vals: g.usage, color: '#7c4dff' },
-        { label: 'GPU 温度', unit: '°C', vals: g.temp, ...th.gpu_temp, color: '#e65100' },
+        { label: 'GPU 占用', unit: '%', vals: g.usage, color: 'var(--gpu)' },
+        { label: 'GPU 温度', unit: '°C', vals: g.temp, ...th.gpu_temp, color: 'var(--gpu)' },
       ]
     }
     case 'mem':
-      return [{ label: '内存占用', unit: '%', vals: h.mem.percent, ...th.mem, color: '#2196f3' }]
+      return [{ label: '内存占用', unit: '%', vals: h.mem.percent, ...th.mem, color: 'var(--ram)' }]
     case 'disk':
       return [
-        { label: '最大分区', unit: '%', vals: h.disk.worst, ...th.disk, color: '#00695c' },
-        { label: '写入', unit: ' MB/s', vals: h.disk.io_write, color: '#8d6e63' },
+        { label: '最大分区', unit: '%', vals: h.disk.worst, ...th.disk, color: 'var(--storage)' },
+        { label: '写入', unit: ' MB/s', vals: h.disk.io_write, color: 'var(--sata)' },
       ]
     case 'link': {
       const l = h.link?.[s.target]

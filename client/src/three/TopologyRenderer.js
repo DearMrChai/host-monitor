@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js'
-import { GROUND, NEUTRAL, toRGB } from '../lib/palette.js'
+import { GROUND, NEUTRAL, STRUCT, COOLANT, toRGB } from '../lib/palette.js'
 
 /**
  * TopologyRenderer (v3 - Realistic PCB)
@@ -15,14 +15,22 @@ import { GROUND, NEUTRAL, toRGB } from '../lib/palette.js'
 
 /* ============ Bus trace encoding ============ */
 
+/* 色值一律读 palette.STRUCT（V3 暗底色表 §2.5），不再在场景里留纸面字面量：
+   DOM 图例读 :root、这里读 STRUCT，而 check-tokens.mjs 把 12 对逐支钉住 —— 图例
+   的紫和线的紫从此没法各改各的（任务书 §6.1，第 1 刀漏的那道闸）。
+   线宽是这套编码的另一半，留在原处：它是几何，不是色。
+   pcie_x1 有意不发色（§2.5 补 2）：它的纸面旧值距 --cpu 只有 ΔE 19、距 --dmi
+   24，都低于 25 下限，收进族里就是制造"档多而互认不出"。x1 与 x4 的差别本来就由
+   线宽 0.10 / 0.16 承载 —— 色相说"哪一组"，宽度说"第几档"。 */
+
 const BUS_STYLE = {
-  ddr:       { color: 0x42a5f5, width: 0.28, label: 'DDR' },
-  pcie_x16:  { color: 0x66bb6a, width: 0.24, label: 'PCIe x16' },
-  pcie_x4:   { color: 0x26c6da, width: 0.16, label: 'PCIe x4' },
-  pcie_x1:   { color: 0x78909c, width: 0.10, label: 'PCIe x1' },
-  nvlink:    { color: 0xab47bc, width: 0.26, label: 'NVLink' },
-  dmi:       { color: 0xffa726, width: 0.14, label: 'DMI' },
-  sata:      { color: 0x8d6e63, width: 0.09, label: 'SATA' },
+  ddr:       { color: toRGB(STRUCT.ddr), width: 0.28, label: 'DDR' },
+  pcie_x16:  { color: toRGB(STRUCT.pcie16), width: 0.24, label: 'PCIe x16' },
+  pcie_x4:   { color: toRGB(STRUCT.pcie4), width: 0.16, label: 'PCIe x4' },
+  pcie_x1:   { color: toRGB(STRUCT.pcie4), width: 0.10, label: 'PCIe x1' },
+  nvlink:    { color: toRGB(STRUCT.nvlink), width: 0.26, label: 'NVLink' },
+  dmi:       { color: toRGB(STRUCT.dmi), width: 0.14, label: 'DMI' },
+  sata:      { color: toRGB(STRUCT.sata), width: 0.09, label: 'SATA' },
 }
 
 /* ============ Colors ============ */
@@ -506,9 +514,12 @@ export class TopologyRenderer {
       const fillGeo = new THREE.BoxGeometry(tankW * 0.86, fillH, tankD * 0.86)
       fillGeo.translate(0, fillH / 2, 0)
       const fillMat = new THREE.MeshStandardMaterial({
-        color: 0x2196f3, roughness: 0.3, metalness: 0.2,
+        // COOLANT, not STRUCT.ram (色表 §6 / 任务书 §6.4-④): this is the colour of
+        // a physical fluid, not of "the memory subsystem". Same value, different
+        // key — two facts, two names, so the coolant can be re-tuned on its own.
+        color: toRGB(COOLANT), roughness: 0.3, metalness: 0.2,
         transparent: true, opacity: 0.75,
-        emissive: 0x2196f3, emissiveIntensity: 0.15,
+        emissive: toRGB(COOLANT), emissiveIntensity: 0.15,
       })
       const fill = new THREE.Mesh(fillGeo, fillMat)
       fill.position.y = 0.12
@@ -940,7 +951,7 @@ export class TopologyRenderer {
       const frac = Math.max(usage / 100, 0.001)
       for (const c of (memComp.containers || [])) {
         c.fill.scale.y = frac
-        c.fillMat.color.copy(color).lerp(new THREE.Color(0x2196f3), 0.45)
+        c.fillMat.color.copy(color).lerp(new THREE.Color(toRGB(COOLANT)), 0.45)
         c.fillMat.emissive.copy(color)
         c.fillMat.emissiveIntensity = 0.1 + (usage / 100) * 0.35
       }

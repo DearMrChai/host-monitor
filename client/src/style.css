@@ -46,12 +46,17 @@
 
   /* 结构族 — §2.5 / R-1. 部件与总线的身份由标签承担，颜色只做分组，允许同色
      （DDR 与 RAM 同值），但任何一支都不许落在绿／红／琥珀（告警专用通道）或
-     中性灰（OFFLINE 独占）上，彩度一律 >= 0.12。11 支配 8 个值。 */
+     中性灰（OFFLINE 独占）上，彩度一律 >= 0.12。12 支配 8 个值。
+     --sata 是第 2 刀才入表的一支（§2.5 补 1）：3D 侧画了 7 条总线、这张表只发了
+     5 支，它和 PCIe×1 一直是"表外色"。现值收进来，不新造色。
+     PCIe×1 依旧不发色、并入 --pcie4（§2.5 补 2），x1/x4 由线宽 0.10/0.16 区分。
+     这 12 支与 lib/palette.js 的 STRUCT 逐支成对，由 check-tokens.mjs 钉住。 */
   --ddr: #58a6ff;
   --pcie16: #bc8cff;
   --pcie4: #39c5cf;
   --nvlink: #f778ba;
   --dmi: #6e8898;
+  --sata: #8d6e63;
   --cpu: #7d8fa8;
   --ram: #58a6ff;
   --gpu: #bc8cff;
@@ -83,7 +88,9 @@ html, body, #app {
   position: absolute; top: 0; left: 0; right: 0;
   display: flex; align-items: center; justify-content: space-between;
   padding: 10px 16px;
-  background: linear-gradient(to bottom, rgba(245,240,230,0.95), transparent);
+  /* 顶部渐隐条：从地面族派生（色表 §2.1），不再留纸面奶油字面量。它是"地面从
+     屏幕上沿压下来一层"，所以取 --bg（地面本体）而不是 --panel（浮层面板）。 */
+  background: linear-gradient(to bottom, color-mix(in srgb, var(--bg) 95%, transparent), transparent);
   pointer-events: none; z-index: 10;
 }
 .tb-left { display: flex; align-items: center; gap: 10px; }
@@ -137,7 +144,11 @@ html, body, #app {
   min-width: 32px;
 }
 .hud-bar {
-  flex: 1; height: 5px; background: rgba(0,0,0,0.08);
+  /* 轨道：R-2 在暗地上反转了"槽"的方向 —— 未填充的部分是**没信息**，所以要
+     比面板更暗，而不是像米色地上那样叠一层黑色半透明（那层落在黑地上几乎读不出来）。
+     CR(panel/bg)=1.17，落在色表 §2.1 的安静面带 1.10~1.70 内：看得见是槽，
+     又不会抢填充条的戏。 */
+  flex: 1; height: 5px; background: var(--bg);
   border-radius: 3px; overflow: hidden;
 }
 .hud-fill {
@@ -146,10 +157,10 @@ html, body, #app {
 }
 .hud-fill.warn { background: var(--orange); }
 .hud-fill.crit { background: var(--red); }
-.hud-fill.gpu { background: #7c4dff; }
+.hud-fill.gpu { background: var(--gpu); }
 .hud-fill.gpu.warn { background: var(--orange); }
 .hud-fill.gpu.crit { background: var(--red); }
-.hud-fill.ram { background: #2196f3; }
+.hud-fill.ram { background: var(--ram); }
 .hud-fill.ram.warn { background: var(--orange); }
 .hud-fill.ram.crit { background: var(--red); }
 .hud-val { font-size: 11px; color: var(--text); min-width: 55px; text-align: right; }
@@ -169,41 +180,55 @@ html, body, #app {
 }
 .bl-item { display: flex; align-items: center; gap: 4px; font-size: 10px; color: var(--text2); }
 .bl-dot { width: 12px; height: 3px; border-radius: 2px; display: inline-block; }
-/* Bus legend. Only two of these five dots are in this cut (色表 §4-a): the old
+/* Bus legend. Only two of these five dots were in cut 1 (色表 §4-a): the old
    .pcie16 #66bb6a was green (ΔE≈77 from STATE.OK) and .dmi #ffa726 orange
    (ΔE≈83 from STATE.WARN) — "a bus is moving" and "this box has a problem"
    shared one signal, breaking R-1's channel monopoly. Both now point at the
-   §2.5 tokens. .ddr/.pcie4/.nvlink are cold already and stay paper-era literals
-   until the legend is rewired to the tokens in a later cut. */
-.bl-dot.ddr { background: #42a5f5; }
+   §2.5 tokens. Cut 2 finishes the row: the remaining three are token-backed
+   too, so a legend swatch and the 3D trace it names can no longer drift apart
+   — check-tokens.mjs pairs all twelve against palette.STRUCT.
+   This legend has 5 entries, not the 7 buses `BUS_STYLE` draws: SATA and PCIe x1
+   were never in it — 色表 §2.5 补 1 counts the DOM legend as 7, the shipped one is
+   5 (logged as a doc/code discrepancy, not settled here). Widening the legend is a
+   素材 change, not a colour-source change, so it stays out of this cut. */
+.bl-dot.ddr { background: var(--ddr); }
 .bl-dot.pcie16 { background: var(--pcie16); }
-.bl-dot.pcie4 { background: #26c6da; }
-.bl-dot.nvlink { background: #ab47bc; }
+.bl-dot.pcie4 { background: var(--pcie4); }
+.bl-dot.nvlink { background: var(--nvlink); }
 .bl-dot.dmi { background: var(--dmi); }
 
 /* CSS2D Labels in 3D scene */
 .topo-label {
   text-align: center; pointer-events: none;
   padding: 4px 10px; border-radius: 6px;
-  background: rgba(255,255,252,0.92);
+  /* 色表 §2.1 的 --panel，半透明以让 blur 有的可糊。这一处原先是 rgba(255,255,252,
+     0.92) —— 黑墙上挂一块 CR≈19 的近白纸片，是全仓最刺眼的一处（任务书 §6.2）。
+     牌面回到地面族之后，边界仍由 --border 那条 1px 描边负责（R-3：层次靠面、
+     边界靠描边，不靠把牌子提亮）。 */
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
   border: 1px solid var(--border);
   backdrop-filter: blur(4px);
 }
 .topo-label .tl-name { font-size: 11px; font-weight: 600; color: var(--text); white-space: nowrap; }
 .topo-label .tl-sub { font-size: 9px; color: var(--text2); white-space: nowrap; margin-top: 2px; }
 
+/* 部件标签名 → 结构族 §2.5（任务书 §6.2 B 组）。牌面上写的是"这块芯片是什么"，
+   所以名字的颜色就是它那一族的身份色，与 3D 线色／图例同一支（palette.STRUCT
+   的另一半由 check-tokens 钉住）。
+   注意：底下六条 border-color 仍是纸面 rgba 值（含绿 46,125,50 与橙 230,130,0 两支
+   撞 R-1 告警通道的），未被本刀点名，故原样留着 —— 已登记，不在这里顺手改。 */
 .topo-label.cpu-label { border-color: rgba(80,80,80,0.25); }
-.topo-label.cpu-label .tl-name { color: #37474f; }
+.topo-label.cpu-label .tl-name { color: var(--cpu); }
 .topo-label.ram-label { border-color: rgba(25,118,210,0.3); }
-.topo-label.ram-label .tl-name { color: #1565c0; }
+.topo-label.ram-label .tl-name { color: var(--ram); }
 .topo-label.gpu-label { border-color: rgba(46,125,50,0.3); }
-.topo-label.gpu-label .tl-name { color: #2e7d32; }
+.topo-label.gpu-label .tl-name { color: var(--gpu); }
 .topo-label.storage-label { border-color: rgba(0,137,123,0.3); }
-.topo-label.storage-label .tl-name { color: #00695c; }
+.topo-label.storage-label .tl-name { color: var(--storage); }
 .topo-label.pch-label { border-color: rgba(230,130,0,0.3); }
-.topo-label.pch-label .tl-name { color: #e65100; }
+.topo-label.pch-label .tl-name { color: var(--pch); }
 .topo-label.nic-label { border-color: rgba(69,90,100,0.3); }
-.topo-label.nic-label .tl-name { color: #37474f; }
+.topo-label.nic-label .tl-name { color: var(--nic); }
 
 /* CPU alarm blink animation.
    R-4 treats "blink" as a scarce channel that costs more on a dark ground: the

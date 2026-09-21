@@ -6,10 +6,17 @@
  * was about: `style.css :root` serves the DOM, this file serves the scene, and
  * `scripts/check-tokens.mjs` fails the build if the two ever disagree.
  *
- * Scope note: only **state** and **ground** colours live here. The motherboard's
- * PCB green / copper / gold in `TopologyRenderer.js` are the colours of physical
- * objects, not of a status dimension, so S4 §1.1 rule 1 does not apply to them
- * and they stay where they are.
+ * Scope note: the motherboard's PCB green / copper / gold in `TopologyRenderer.js`
+ * are the colours of physical objects, not of a status dimension, so S4 §1.1
+ * rule 1 does not apply to them and they stay where they are.
+ *
+ * Why the **structure** family lives here too (V3 cut 2, 任务书 §6.1): cut 1 put
+ * those tokens in `style.css :root` only, while their other consumer — the 3D bus
+ * traces — reads this file. That is the same "one fact, two homes" shape H9 was
+ * about, and `check-tokens.mjs` could not see it because its pairing table never
+ * listed the structural keys. So `STRUCT` below mirrors `:root` key for key and
+ * the gate now covers all twelve; `COOLANT` is deliberately *not* paired, because
+ * the DOM has no legend swatch for a liquid.
  */
 
 /** The four states, as the scene sees them (matches `--green/--orange/--red`). */
@@ -76,6 +83,50 @@ export const NEUTRAL = {
   alarm: '#ff6a5a',
 }
 
+/** Structure family (parts / buses) — V3 暗底色表 §2.5 / R-1, byte-for-byte the
+ *  twelve `:root` tokens, and pinned to them pair by pair by check-tokens.mjs.
+ *
+ *  R-1 is why these are *cold* hues: green / amber / red are the alarm channel's
+ *  and neutral grey is OFFLINE's, so a structural colour that drifts into any of
+ *  those four tells "this bus is carrying traffic" and "this box has a problem"
+ *  with the same pixel. Part colours intentionally equal their bus colour (ram=ddr,
+ *  gpu=pcie16, storage=pcie4, pch=nvlink) — that sameness *is* the claim "this chip
+ *  hangs off that bus", and it is asserted, not coincidental (§2.5 补 3).
+ *
+ *  PCIe x1 has no key on purpose (§2.5 补 2): its old value sat ΔE 19 from `cpu`
+ *  and 24 from `dmi`, below the 25 floor, so adding it would manufacture "more
+ *  tiers than anyone can tell apart". x1 vs x4 is carried by trace *width*
+ *  (0.10 vs 0.16) — hue says which group, width says which generation.
+ *
+ *  Like INK, these must stay literal '#rrggbb': check-tokens.mjs scrapes this file
+ *  with a hex regex, so `ddr: STRUCT.ram` would read as missing and fail the build. */
+export const STRUCT = {
+  ddr: '#58a6ff',
+  pcie16: '#bc8cff',
+  pcie4: '#39c5cf',
+  nvlink: '#f778ba',
+  dmi: '#6e8898',
+  sata: '#8d6e63',
+  cpu: '#7d8fa8',
+  ram: '#58a6ff',
+  gpu: '#bc8cff',
+  storage: '#39c5cf',
+  pch: '#f778ba',
+  nic: '#7d9fb8',
+}
+
+/** Coolant inside the memory water block — 色表 §6.
+ *
+ *  Same value as STRUCT.ram, different key, and that is the point: "the RAM
+ *  subsystem" and "the fluid in this block" are two facts, so they get two names
+ *  (R-1 asks for one home per fact, not one name per value). Merging them would
+ *  cost the ability to tune the coolant's look on its own — §6 notes it is the one
+ *  thing on this screen most likely to be called too bright or too plastic.
+ *
+ *  Not in check-tokens' pairing table: it exists only on the WebGL side, the DOM
+ *  legend has no coolant swatch to disagree with (任务书 §6.5). */
+export const COOLANT = '#2196f3'
+
 /** '#rrggbb' -> 0xrrggbb, the only form three.js setters accept. */
 export function toRGB(hex) {
   return parseInt(hex.replace('#', ''), 16)
@@ -88,4 +139,4 @@ export function levelColor(level) {
   return hex == null ? null : toRGB(hex)
 }
 
-export default { STATE, INK, GROUND, NEUTRAL, toRGB, levelColor }
+export default { STATE, INK, GROUND, NEUTRAL, STRUCT, COOLANT, toRGB, levelColor }
