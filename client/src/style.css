@@ -33,6 +33,11 @@
   --green: #3fb950;
   --orange: #d29922;
   --red: #f85149;
+  /* 告警脉冲 = CRIT 的"更响"，不是第五态（色表 §2.3/§4-b）。第 1 刀只把它写进了
+     `palette.NEUTRAL.alarm`（WebGL 侧），DOM 侧没有对应的 token，于是墙上闪红的
+     那一块文字至今画的是两个没进过表的红（#cc0000/#dd4400）——**恰恰在最该省着用
+     的那条通道上，两个家各闪各的**。这一行把家补齐，配对由 check-tokens 钉住。 */
+  --alarm: #ff6a5a;
 
   /* 文字档（ink）— R-2 反转后本应整族作废（色表 §3），字直接用面色。
      删名的前置检查已做：14 个 .vue / 54 处 var(--*-ink) + check-tokens.mjs:57-59
@@ -215,31 +220,30 @@ html, body, #app {
 /* 部件标签名 → 结构族 §2.5（任务书 §6.2 B 组）。牌面上写的是"这块芯片是什么"，
    所以名字的颜色就是它那一族的身份色，与 3D 线色／图例同一支（palette.STRUCT
    的另一半由 check-tokens 钉住）。
-   注意：底下六条 border-color 仍是纸面 rgba 值（含绿 46,125,50 与橙 230,130,0 两支
-   撞 R-1 告警通道的），未被本刀点名，故原样留着 —— 已登记，不在这里顺手改。 */
-.topo-label.cpu-label { border-color: rgba(80,80,80,0.25); }
+   原先这六条各带一句 `border-color: rgba(...)`（纸面值，含绿 46,125,50、橙 230,130,0
+   两支撞告警通道的，和两支中性灰——而灰在墙上归 OFFLINE 独占 R-1）。删掉而不是换 token：
+   类别已经由 .tl-name 的颜色说过一遍，边框再染一次＝同一个事实两个家（H9 的老形状），
+   而且那六支边框色跟名字色**互不相同**，说的其实是别的事——但没有任何事需要它说。
+   边界仍由上面那条 --border 负责（R-3：层次靠面、边界靠描边）。 */
 .topo-label.cpu-label .tl-name { color: var(--cpu); }
-.topo-label.ram-label { border-color: rgba(25,118,210,0.3); }
 .topo-label.ram-label .tl-name { color: var(--ram); }
-.topo-label.gpu-label { border-color: rgba(46,125,50,0.3); }
 .topo-label.gpu-label .tl-name { color: var(--gpu); }
-.topo-label.storage-label { border-color: rgba(0,137,123,0.3); }
 .topo-label.storage-label .tl-name { color: var(--storage); }
-.topo-label.pch-label { border-color: rgba(230,130,0,0.3); }
 .topo-label.pch-label .tl-name { color: var(--pch); }
-.topo-label.nic-label { border-color: rgba(69,90,100,0.3); }
 .topo-label.nic-label .tl-name { color: var(--nic); }
 
 /* CPU alarm blink animation.
    R-4 treats "blink" as a scarce channel that costs more on a dark ground: the
    period slows from 0.5s to 1.2s and the depth shallow from 1 -> 0.5 to
    1 -> 0.72 (opacity only ever drops, never climbs past the resting state).
-   The two colour literals inside the keyframes are the paper-era pair and are
-   *not* in this cut's scope — the alarm pulse itself now reads NEUTRAL.alarm
-   #ff6a5a (§2.3) in the scene, and re-tuning these belongs with the motion pass. */
+   The swing is now **opacity only**. It used to travel between #cc0000 and
+   #dd4400 — two reds that never entered the colour table, one of which (hue 16°)
+   sits in the amber family, so the DOM pulse was flickering *across* state
+   families while the scene pulsed NEUTRAL.alarm. Same fact, two homes, no gate
+   (H9's shape, in the channel P4 says is scarcest). Both homes now read --alarm. */
 @keyframes alarm-flash {
-  0%, 100% { opacity: 1; color: #cc0000; text-shadow: 0 0 6px rgba(255,0,0,0.5); }
-  50% { opacity: 0.72; color: #dd4400; text-shadow: 0 0 3px rgba(255,68,0,0.4); }
+  0%, 100% { opacity: 1; color: var(--alarm); text-shadow: 0 0 6px color-mix(in srgb, var(--alarm) 50%, transparent); }
+  50% { opacity: 0.72; color: var(--alarm); text-shadow: 0 0 3px color-mix(in srgb, var(--alarm) 40%, transparent); }
 }
 .alarm-blink {
   animation: alarm-flash 1.2s ease-in-out infinite !important;

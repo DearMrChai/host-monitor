@@ -58,6 +58,10 @@ if (!css) {
     ['INK', 'warn', 'warn-ink', '警告的文字档'],
     ['INK', 'crit', 'crit-ink', '严重的文字档'],
     ['GROUND', 'bg', 'bg', '场景底色 = 页面底色'],
+    /* 告警脉冲此前只有 WebGL 一个家（`palette.NEUTRAL.alarm`），DOM 侧没有 token，
+       于是墙上那块闪红的文字一直画着两个没进过表的红。最稀缺的通道上反而没闸
+       ——这一对补上之后，`alarm-flash` 关键帧读的就是这个 token。 */
+    ['NEUTRAL', 'alarm', 'alarm', '告警脉冲：CRIT 的"更响"，两侧必须同一个红'],
   ]
   /* 结构族 12 对 — V3 翻暗第 2 刀（任务书 §6.1/§6.5）。
      第 1 刀把 §2.5 那族只发在 `:root`，可它的另一个家是 3D 的总线色，而 canvas
@@ -88,9 +92,13 @@ if (!css) {
 
   /* ② The DOM side must not go back to literals. `--text3` is excluded on
      purpose: OFFLINE borrows the grey scale rather than owning a colour (S1
-     §3.2), so greying text out is not a status declaration. */
+     §3.2), so greying text out is not a status declaration.
+     ⚠️ 本闸有两个已知的盲区（09-21 复核时确认，**留给下一刀，不在此偷偷扩**）：
+       a) 它跳过 style.css 自身，而"状态色 + 手调 alpha"恰恰大多写在那儿
+          （`rgba(30,140,50,.3)` 这类＝绿色 5 号，第 1/2 刀的 hex 扫描看不见）；
+       b) 它只匹配 `#rrggbb` 形式，`rgb()`／`rgba()` 写法一律漏过。 */
   const banned = new Map()
-  for (const t of ['green', 'orange', 'red', 'accent', 'ok-ink', 'warn-ink', 'crit-ink', 'up', 'down']) {
+  for (const t of ['green', 'orange', 'red', 'alarm', 'accent', 'ok-ink', 'warn-ink', 'crit-ink', 'up', 'down']) {
     if (css[t]) banned.set(css[t], `--${t}`)
   }
   const hits = []
