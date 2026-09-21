@@ -93,25 +93,52 @@ if (!css) {
   /* ② The DOM side must not go back to literals. `--text3` is excluded on
      purpose: OFFLINE borrows the grey scale rather than owning a colour (S1
      §3.2), so greying text out is not a status declaration.
-     ⚠️ 本闸有两个已知的盲区（09-21 复核时确认，**留给下一刀，不在此偷偷扩**）：
-       a) 它跳过 style.css 自身，而"状态色 + 手调 alpha"恰恰大多写在那儿
-          （`rgba(30,140,50,.3)` 这类＝绿色 5 号，第 1/2 刀的 hex 扫描看不见）；
-       b) 它只匹配 `#rrggbb` 形式，`rgb()`／`rgba()` 写法一律漏过。 */
+
+     V3 翻暗第 2.5 刀（任务书 §6.6）把这条闸的两个已知盲区补掉了 —— 它此前
+     "在但管不着"：一整类 `状态色 + 手调 alpha` 的字面量从它眼皮底下过了两年。
+       盲区 a) 它跳过 style.css 自身，而这类 tint 大多写在那儿。现在纳入扫描，
+              只豁免 `:root` 那一段 —— 那里是 token 的**定义家**，不是消费者，
+              而且它由上面的成对表单独钉住；连它一起扫会误报，因为 §2.5 里
+              `--ddr`／`--ram` 与 `--accent` **有意同值**（部件色＝所挂总线色），
+              在 :root 里一个 hex 出现在别的 token 名下是合法事实，不是漂移。
+       盲区 b) 它只匹配 `#rrggbb`。现在同时匹配 `rgb()/rgba()` 三元组：把每支
+              token 的值换算成三元组再比，逗号式与斜杠式都认。
+     两条都只是**补覆盖面**：不新增判据、不新增色值，banned 集与原来同一支。 */
   const banned = new Map()
-  for (const t of ['green', 'orange', 'red', 'alarm', 'accent', 'ok-ink', 'warn-ink', 'crit-ink', 'up', 'down']) {
-    if (css[t]) banned.set(css[t], `--${t}`)
+  const triplePattern = (hex, sep) => {
+    const n = parseInt(hex.slice(1), 16)
+    const [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255]
+    // `(?![\d.])` so --red's 34 does not match somebody else's 345.
+    const num = (v) => `${v}(?![\\d.])`
+    return new RegExp(`rgba?\\(\\s*${num(r)}${sep}${num(g)}${sep}${num(b)}\\s*[^)]*\\)`, 'i')
   }
+  for (const t of ['green', 'orange', 'red', 'alarm', 'accent', 'ok-ink', 'warn-ink', 'crit-ink', 'up', 'down']) {
+    // 同值只留第一个名字（STATE 面色排在 INK 文字档之前），否则 --red 的提示
+    // 会被后写入的 --crit-ink 顶掉：值一致，说哪个都不算错，但指面色更准。
+    if (css[t] && !banned.has(css[t])) banned.set(css[t], `--${t}`)
+  }
+  const ROOT_RANGE = (() => {
+    const m = /:root\s*\{[\s\S]*?\n\}/.exec(CSS)
+    if (!m) return null
+    const line = (idx) => CSS.slice(0, idx).split('\n').length
+    return [line(m.index), line(m.index + m[0].length)]
+  })()
   const hits = []
   const walk = (dir) => {
     for (const e of readdirSync(dir, { withFileTypes: true })) {
       const p = join(dir, e.name)
       if (e.isDirectory()) { if (e.name !== 'three') walk(p); continue }
-      if (!/\.(vue|css)$/.test(e.name) || e.name === 'style.css') continue
+      if (!/\.(vue|css)$/.test(e.name)) continue
       const text = readFileSync(p, 'utf8')
+      const rel = p.slice(SRC.length + 1)
       text.split('\n').forEach((line, i) => {
+        if (e.name === 'style.css' && ROOT_RANGE && i + 1 >= ROOT_RANGE[0] && i + 1 <= ROOT_RANGE[1]) return
         for (const [hex, token] of banned) {
-          if (line.toLowerCase().includes(hex)) {
-            hits.push(`${p.slice(SRC.length + 1)}:${i + 1}  ${hex.trim()} should be var(${token})`)
+          const found = line.toLowerCase().includes(hex) ? hex
+            : triplePattern(hex, '\\s*,\\s*').exec(line)?.[0]
+            ?? triplePattern(hex, '\\s+').exec(line)?.[0]
+          if (found) {
+            hits.push(`${rel}:${i + 1}  ${found.trim()} should be var(${token})`)
           }
         }
       })

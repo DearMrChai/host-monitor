@@ -211,7 +211,7 @@ const uptimeText = computed(() => {
 .hud-absent em { display: block; font-style: normal; font-size: 11px; color: var(--text3); }
 .hud-class {
   font-style: normal; font-size: 10px; border-radius: 8px; padding: 0 6px;
-  color: var(--ok-ink); background: rgba(30,140,50,.10);
+  color: var(--ok-ink); background: color-mix(in srgb, var(--green) 10%, transparent);
 }
 .hud-class.ephemeral { color: var(--text2); background: rgba(0,0,0,.05); border: 1px dashed var(--border); }
 .hud-muted { font-style: normal; font-size: 11px; }

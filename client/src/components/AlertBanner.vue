@@ -47,7 +47,7 @@ const more = computed(() => Math.max(0, crits.value.length - 2))
 .banner {
   display: flex; align-items: center; gap: 10px;
   margin: 10px 14px 0; padding: 10px 14px; cursor: pointer;
-  background: rgba(248, 81, 73, 0.10); border: 1px solid rgba(248, 81, 73, 0.5);
+  background: color-mix(in srgb, var(--red) 10%, transparent); border: 1px solid color-mix(in srgb, var(--red) 50%, transparent);
   border-radius: 8px; color: var(--crit-ink);
 }
 .bn-icon { width: 10px; height: 10px; border-radius: 50%; background: var(--red); animation: blink 1s infinite; flex-shrink: 0; }

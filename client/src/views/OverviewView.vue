@@ -85,7 +85,7 @@ async function classify(node, cls) {
   max-height: 88px; overflow-y: auto;
   margin: 14px 14px -4px; padding: 8px 12px;
   font-size: 12px; color: var(--text2);
-  background: rgba(210,153,34,.08); border: 1px dashed var(--orange); border-radius: 8px;
+  background: color-mix(in srgb, var(--orange) 8%, transparent); border: 1px dashed var(--orange); border-radius: 8px;
 }
 .og-lead { flex-shrink: 0; font-weight: 600; color: var(--warn-ink); }
 .og-lead em { font-style: normal; font-weight: 400; font-size: 11px; color: var(--text3); margin-left: 6px; }

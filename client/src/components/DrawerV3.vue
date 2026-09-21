@@ -351,7 +351,7 @@ const fmtDur = (ms) => {
   font: inherit; font-size: 10px; padding: 1px 7px; margin-left: 4px;
   cursor: pointer; color: var(--text2);
 }
-.range-btns button.on { border-color: var(--accent); color: var(--accent); background: rgba(88,166,255,.08); }
+.range-btns button.on { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
 .trend-charts { display: flex; flex-wrap: wrap; gap: 10px 18px; }
 
 .alert-log { margin-top: 12px; border-top: 1px dashed var(--border); padding-top: 8px; }

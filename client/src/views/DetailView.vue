@@ -279,7 +279,7 @@ onBeforeUnmount(() => {
 /* Class is never implicit (S1 design §9): 常驻/临时 must be readable here too. */
 .tb-class {
   font-size: 10px; border-radius: 8px; padding: 0 6px; pointer-events: auto;
-  color: var(--ok-ink); background: rgba(30,140,50,.10);
+  color: var(--ok-ink); background: color-mix(in srgb, var(--green) 10%, transparent);
 }
 .tb-class.ephemeral {
   color: var(--text2); background: rgba(0,0,0,.05); border: 1px dashed var(--border);
@@ -288,9 +288,9 @@ onBeforeUnmount(() => {
   font-size: 11px; font-weight: 700; padding: 2px 10px; border-radius: 12px;
   border: 1px solid var(--border); background: var(--bg-glass); pointer-events: auto;
 }
-.tb-nodelevel.ok { color: var(--ok-ink); border-color: rgba(30,140,50,.4); }
-.tb-nodelevel.warn { color: var(--warn-ink); border-color: rgba(210,153,34,.5); }
-.tb-nodelevel.crit { color: var(--crit-ink); border-color: rgba(248,81,73,.5); }
+.tb-nodelevel.ok { color: var(--ok-ink); border-color: color-mix(in srgb, var(--green) 40%, transparent); }
+.tb-nodelevel.warn { color: var(--warn-ink); border-color: color-mix(in srgb, var(--orange) 50%, transparent); }
+.tb-nodelevel.crit { color: var(--crit-ink); border-color: color-mix(in srgb, var(--red) 50%, transparent); }
 .tb-nodelevel.offline { color: var(--text3); }
 
 .offline-note {

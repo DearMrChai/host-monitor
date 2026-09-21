@@ -137,7 +137,7 @@ export default { name: 'EventStream', emits: ['open'] }
   font: inherit; font-size: 11px; cursor: pointer; padding: 1px 8px;
   border: 1px solid transparent; border-radius: 9px; background: rgba(0,0,0,.04); color: var(--text2);
 }
-.es-kinds button.on { border-color: var(--accent); color: var(--accent); background: rgba(9,105,218,.08); }
+.es-kinds button.on { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
 .es-at { margin-left: auto; font-size: 10px; color: var(--text3); }
 .es-at.err { color: var(--crit-ink); }
 

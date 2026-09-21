@@ -318,9 +318,9 @@ onBeforeUnmount(() => {
   font-size: max(26px, 1.9vw); font-weight: 700; letter-spacing: 1px;
   padding: 2px 16px; border-radius: 8px; border: 2px solid;
 }
-.k-health.ok { color: var(--ok-ink); border-color: var(--green); background: rgba(30,140,50,.08); }
-.k-health.warn { color: var(--warn-ink); border-color: var(--orange); background: rgba(210,153,34,.10); }
-.k-health.crit { color: var(--crit-ink); border-color: var(--red); background: rgba(248,81,73,.10); }
+.k-health.ok { color: var(--ok-ink); border-color: var(--green); background: color-mix(in srgb, var(--green) 8%, transparent); }
+.k-health.warn { color: var(--warn-ink); border-color: var(--orange); background: color-mix(in srgb, var(--orange) 10%, transparent); }
+.k-health.crit { color: var(--crit-ink); border-color: var(--red); background: color-mix(in srgb, var(--red) 10%, transparent); }
 .k-health.offline { color: var(--text2); border-color: var(--text3); background: rgba(0,0,0,.04); }
 /* The screen's one DOM animation, spent on what must be noticed from across a
    room. The 3D pulses live inside the scene's own budget (§1.4). */

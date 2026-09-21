@@ -140,11 +140,14 @@ const bars = computed(() => {
   border-radius: 14px; border: 1px solid;
 }
 .health-pill .hp-dot { width: 9px; height: 9px; border-radius: 50%; }
-.health-pill.ok   { color: var(--ok-ink); border-color: rgba(30,140,50,.4);  background: rgba(30,140,50,.08); }
+/* 药丸的描边与底都是"某个状态色 + 一个透明度"，所以由面色派生（V3 第 2.5 刀）。
+   .ok 那两支此前是 rgba(30,140,50) —— 纸面绿，不在色表内，而同一行的圆点用的是
+   var(--green)：一块药丸上并存两种"正常"。alpha 原样保留，只有那三支表外色真变色。 */
+.health-pill.ok   { color: var(--ok-ink); border-color: color-mix(in srgb, var(--green) 40%, transparent);  background: color-mix(in srgb, var(--green) 8%, transparent); }
 .health-pill.ok .hp-dot   { background: var(--green); }
-.health-pill.warn { color: var(--warn-ink); border-color: rgba(210,153,34,.5); background: rgba(210,153,34,.10); }
+.health-pill.warn { color: var(--warn-ink); border-color: color-mix(in srgb, var(--orange) 50%, transparent); background: color-mix(in srgb, var(--orange) 10%, transparent); }
 .health-pill.warn .hp-dot { background: var(--orange); }
-.health-pill.crit { color: var(--crit-ink); border-color: rgba(248,81,73,.5);  background: rgba(248,81,73,.10); }
+.health-pill.crit { color: var(--crit-ink); border-color: color-mix(in srgb, var(--red) 50%, transparent);  background: color-mix(in srgb, var(--red) 10%, transparent); }
 .health-pill.crit .hp-dot { background: var(--red); animation: pulse 1s infinite; }
 .health-pill.offline { color: var(--text2); border-color: var(--border); background: rgba(0,0,0,.04); }
 .health-pill.offline .hp-dot { background: var(--text3); }
@@ -154,13 +157,13 @@ const bars = computed(() => {
 .cb-muted { font-size: 11px; color: var(--warn-ink); }
 .pending-badge {
   font-size: 11px; padding: 2px 9px; border-radius: 10px; cursor: pointer;
-  border: 1px solid var(--accent); color: var(--accent); background: rgba(9,105,218,.08);
+  border: 1px solid var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 .link-degraded {
   font-size: 11px; padding: 2px 9px; border-radius: 10px;
-  border: 1px solid var(--orange); color: var(--warn-ink); background: rgba(210,153,34,.10);
+  border: 1px solid var(--orange); color: var(--warn-ink); background: color-mix(in srgb, var(--orange) 10%, transparent);
 }
-.link-degraded.crit { border-color: var(--red); color: var(--crit-ink); background: rgba(248,81,73,.10); }
+.link-degraded.crit { border-color: var(--red); color: var(--crit-ink); background: color-mix(in srgb, var(--red) 10%, transparent); }
 /* Both are pointers into the 接入 page, so they take the same chip shape as
    pending-badge rather than inventing a third look for "go look here". */
 .cb-demo {
@@ -169,7 +172,7 @@ const bars = computed(() => {
 }
 .cb-keyless {
   font-size: 11px; padding: 2px 9px; border-radius: 10px; cursor: pointer;
-  border: 1px solid var(--orange); color: var(--warn-ink); background: rgba(210,153,34,.10);
+  border: 1px solid var(--orange); color: var(--warn-ink); background: color-mix(in srgb, var(--orange) 10%, transparent);
 }
 .cb-view { display: flex; gap: 0; border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
 .cb-view button {

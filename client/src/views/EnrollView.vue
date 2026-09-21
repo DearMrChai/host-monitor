@@ -441,9 +441,9 @@ const keyless = computed(() => admin.keylessAgents || [])
 .enroll { height: 100%; overflow: auto; padding: 14px; display: flex; flex-direction: column; gap: 12px; }
 .en-mode {
   font-size: 12px; padding: 7px 12px; border-radius: 8px;
-  border: 1px solid var(--orange); color: var(--warn-ink); background: rgba(210,153,34,.08);
+  border: 1px solid var(--orange); color: var(--warn-ink); background: color-mix(in srgb, var(--orange) 8%, transparent);
 }
-.en-mode.off { border-color: var(--red); color: var(--crit-ink); background: rgba(248,81,73,.08); }
+.en-mode.off { border-color: var(--red); color: var(--crit-ink); background: color-mix(in srgb, var(--red) 8%, transparent); }
 .en-body { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 14px; align-items: start; }
 .en-col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
 .en-card {
@@ -474,7 +474,7 @@ button { font: inherit; }
 .ec-text {
   font-family: ui-monospace, Consolas, monospace; font-size: 22px; letter-spacing: 2px;
   padding: 8px 10px; border-radius: 8px; border: 1px dashed var(--accent);
-  background: rgba(9,105,218,.06); user-select: all;
+  background: color-mix(in srgb, var(--accent) 6%, transparent); user-select: all;
 }
 .ec-meta { display: flex; align-items: center; gap: 12px; font-size: 11px; color: var(--text2); flex-wrap: wrap; }
 .ec-meta button {
@@ -517,7 +517,7 @@ button { font: inherit; }
 .en-joined { display: flex; align-items: center; gap: 8px; font-size: 12px; flex-wrap: wrap; }
 .ej {
   display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px;
-  padding: 4px 10px; border-radius: 14px; border: 1px solid var(--green); background: rgba(30,140,50,.08);
+  padding: 4px 10px; border-radius: 14px; border: 1px solid var(--green); background: color-mix(in srgb, var(--green) 8%, transparent);
   color: var(--ok-ink);
 }
 .ej i { font-style: normal; font-size: 10px; color: var(--text3); }
@@ -527,13 +527,13 @@ button { font: inherit; }
 .kl {
   display: inline-flex; align-items: center; gap: 4px; cursor: pointer;
   font-size: 11px; padding: 2px 9px; border-radius: 10px;
-  border: 1px dashed var(--orange); color: var(--warn-ink); background: rgba(210,153,34,.06);
+  border: 1px dashed var(--orange); color: var(--warn-ink); background: color-mix(in srgb, var(--orange) 6%, transparent);
 }
 .kl i { font-style: normal; font-size: 10px; color: var(--text3); }
 .en-demo { display: flex; align-items: center; gap: 10px; }
 .en-stop {
   font-size: 12px; cursor: pointer; padding: 5px 14px; border-radius: 14px;
-  border: 1px solid var(--red); background: rgba(248,81,73,.08); color: var(--crit-ink);
+  border: 1px solid var(--red); background: color-mix(in srgb, var(--red) 8%, transparent); color: var(--crit-ink);
 }
 .dm-state { font-size: 11px; color: var(--ok-ink); }
 .dm-state.off { color: var(--text3); }

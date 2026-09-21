@@ -311,11 +311,11 @@ function pick(item) {
   border: 1px solid var(--border); border-radius: 9px; background: rgba(0,0,0,.03);
 }
 .hc-class { font-size: 10px; padding: 1px 6px; border-radius: 9px; flex-shrink: 0; }
-.hc-class.persistent { color: var(--ok-ink); background: rgba(30,140,50,.10); }
+.hc-class.persistent { color: var(--ok-ink); background: color-mix(in srgb, var(--green) 10%, transparent); }
 .hc-class.ephemeral { color: var(--text2); background: rgba(0,0,0,.05); border: 1px dashed var(--border); }
 .hc-pending {
   font-size: 10px; color: var(--warn-ink); flex-shrink: 0;
-  background: rgba(210,153,34,.12); border-radius: 9px; padding: 1px 7px;
+  background: color-mix(in srgb, var(--orange) 12%, transparent); border-radius: 9px; padding: 1px 7px;
 }
 .hc-more {
   border: 1px solid transparent; background: none; color: var(--text3);
@@ -395,7 +395,7 @@ function pick(item) {
 .hcm-actions { display: flex; gap: 6px; }
 .hcm-actions button {
   font: inherit; font-size: 11px; padding: 3px 10px; cursor: pointer;
-  border-radius: 11px; border: 1px solid var(--red); background: rgba(248,81,73,.10); color: var(--crit-ink);
+  border-radius: 11px; border: 1px solid var(--red); background: color-mix(in srgb, var(--red) 10%, transparent); color: var(--crit-ink);
 }
 .hcm-actions .ghost { border-color: var(--border); background: none; color: var(--text2); }
 </style>
