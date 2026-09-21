@@ -5,32 +5,64 @@
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 :root {
-  --bg: #f5f0e6;
-  --bg-glass: rgba(255, 255, 252, 0.92);
-  --border: #d0cbbf;
-  --text: #1c1c1c;
-  --text2: #5a5a5a;
-  --text3: #8a8a8a;
-  --accent: #0969da;
+  /* 地面族 — V3 暗底色表 §2.1 / R-3.
+     bg -> plate -> panel is a deliberate 1.12 / 1.17 step, which is small on
+     purpose: depth is carried by the faces, card edges by --border (1.42).
+     Pushing the panels brighter is the classic dark-ground error — the wall
+     breaks into white blotches and loses the depth it was chasing. */
+  --bg: #0b1015;
+  --plate: #131d28;
+  --panel: #16212d;
+  --border: #22303d;
+  --grid-major: #1d2a38;
+  --grid-minor: #18222d;
+  /* --panel at 0.92 alpha, i.e. §2.1's note "原 --bg-glass 的位置". The key
+     stays because 39 consumers across 16 files sit in .vue, outside this cut. */
+  --bg-glass: rgba(22, 33, 45, 0.92);
+
+  /* 文字族 — §2.2 / R-2. --text3 was lifted from a drafted 4.07 to 6.24. */
+  --text: #dfe7ee;
+  --text2: #9fb0bd;
+  --text3: #8296a5;
+  --accent: #58a6ff;
+  --radius: 8px;
+
+  /* S4 §1.1: the four states. Values unchanged byte for byte — these were
+     GitHub's *dark* theme values all along, borrowed onto a beige floor.
+     Flipping the ground is what puts them on a legal background (色表 §0.1). */
   --green: #3fb950;
   --orange: #d29922;
   --red: #f85149;
-  --radius: 8px;
 
-  /* S4 §1.1: the four states, and the three "ink" values they need on paper.
-     A state has two sanctioned colours and no more: the face (bar, dot, border)
-     and the text. The faces are too light to read as type on a #f5f0e6 ground,
-     and before this pair existed every component darkened them by eye - 39
-     literals across 11 files, which is how "one fact, one source" dies.
-     Any new colour must first answer S4 §1.1 rule 1 (which state dimension does
-     it carry); if it has no answer it gets a grey. */
-  --ok-ink: #1a7f37;
-  --warn-ink: #9a6700;
-  --crit-ink: #b62324;
+  /* 文字档（ink）— R-2 反转后本应整族作废（色表 §3），字直接用面色。
+     删名的前置检查已做：14 个 .vue / 54 处 var(--*-ink) + check-tokens.mjs:57-59
+     的成对硬约束，两处都越出本刀「只改 palette.js + :root」的范围，故本刀只把
+     **值**指回 §2.3 的状态色本体（纸面三值在 #0b1015 上 CR 3.76/3.92/2.96，
+     全部低于 4.5 文字闸，是回归不是中间态），键保留以免悬空引用。
+     删除动作连同 54 处指向 var(--green/--orange/--red) 一起留给下一刀。 */
+  --ok-ink: #3fb950;
+  --warn-ink: #d29922;
+  --crit-ink: #f85149;
+
+  /* 结构族 — §2.5 / R-1. 部件与总线的身份由标签承担，颜色只做分组，允许同色
+     （DDR 与 RAM 同值），但任何一支都不许落在绿／红／琥珀（告警专用通道）或
+     中性灰（OFFLINE 独占）上，彩度一律 >= 0.12。11 支配 8 个值。 */
+  --ddr: #58a6ff;
+  --pcie16: #bc8cff;
+  --pcie4: #39c5cf;
+  --nvlink: #f778ba;
+  --dmi: #6e8898;
+  --cpu: #7d8fa8;
+  --ram: #58a6ff;
+  --gpu: #bc8cff;
+  --storage: #39c5cf;
+  --pch: #f778ba;
+  --nic: #7d9fb8;
 
   /* Delta direction. Deliberately outside the four-state palette (S3b): if a
      rising number were red, "is it going up" and "is it in trouble" would share
-     one channel and the loudest reading would always be the pessimistic one. */
+     one channel and the loudest reading would always be the pessimistic one.
+     色表未收录这两支（§6），值照旧。 */
   --up: #8b5cf6;
   --down: #0d9488;
 }
@@ -137,11 +169,17 @@ html, body, #app {
 }
 .bl-item { display: flex; align-items: center; gap: 4px; font-size: 10px; color: var(--text2); }
 .bl-dot { width: 12px; height: 3px; border-radius: 2px; display: inline-block; }
+/* Bus legend. Only two of these five dots are in this cut (色表 §4-a): the old
+   .pcie16 #66bb6a was green (ΔE≈77 from STATE.OK) and .dmi #ffa726 orange
+   (ΔE≈83 from STATE.WARN) — "a bus is moving" and "this box has a problem"
+   shared one signal, breaking R-1's channel monopoly. Both now point at the
+   §2.5 tokens. .ddr/.pcie4/.nvlink are cold already and stay paper-era literals
+   until the legend is rewired to the tokens in a later cut. */
 .bl-dot.ddr { background: #42a5f5; }
-.bl-dot.pcie16 { background: #66bb6a; }
+.bl-dot.pcie16 { background: var(--pcie16); }
 .bl-dot.pcie4 { background: #26c6da; }
 .bl-dot.nvlink { background: #ab47bc; }
-.bl-dot.dmi { background: #ffa726; }
+.bl-dot.dmi { background: var(--dmi); }
 
 /* CSS2D Labels in 3D scene */
 .topo-label {
@@ -167,13 +205,19 @@ html, body, #app {
 .topo-label.nic-label { border-color: rgba(69,90,100,0.3); }
 .topo-label.nic-label .tl-name { color: #37474f; }
 
-/* CPU alarm blink animation */
+/* CPU alarm blink animation.
+   R-4 treats "blink" as a scarce channel that costs more on a dark ground: the
+   period slows from 0.5s to 1.2s and the depth shallow from 1 -> 0.5 to
+   1 -> 0.72 (opacity only ever drops, never climbs past the resting state).
+   The two colour literals inside the keyframes are the paper-era pair and are
+   *not* in this cut's scope — the alarm pulse itself now reads NEUTRAL.alarm
+   #ff6a5a (§2.3) in the scene, and re-tuning these belongs with the motion pass. */
 @keyframes alarm-flash {
   0%, 100% { opacity: 1; color: #cc0000; text-shadow: 0 0 6px rgba(255,0,0,0.5); }
-  50% { opacity: 0.5; color: #dd4400; text-shadow: 0 0 3px rgba(255,68,0,0.4); }
+  50% { opacity: 0.72; color: #dd4400; text-shadow: 0 0 3px rgba(255,68,0,0.4); }
 }
 .alarm-blink {
-  animation: alarm-flash 0.5s ease-in-out infinite !important;
+  animation: alarm-flash 1.2s ease-in-out infinite !important;
 }
 .alarm-blink .tl-name,
 .alarm-blink .tl-sub {
