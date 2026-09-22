@@ -8,12 +8,13 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "check": "node scripts/check-tokens.mjs && node scripts/selftest-sound.mjs && node scripts/selftest-fps.mjs && node scripts/selftest-silhouette.mjs && node scripts/selftest-nav.mjs",
+    "check": "node scripts/check-tokens.mjs && node scripts/selftest-sound.mjs && node scripts/selftest-fps.mjs && node scripts/selftest-silhouette.mjs && node scripts/selftest-nav.mjs && node scripts/selftest-skin.mjs",
     "check:tokens": "node scripts/check-tokens.mjs",
     "check:sound": "node scripts/selftest-sound.mjs",
     "check:fps": "node scripts/selftest-fps.mjs",
     "check:silhouette": "node scripts/selftest-silhouette.mjs",
-    "check:nav": "node scripts/selftest-nav.mjs"
+    "check:nav": "node scripts/selftest-nav.mjs",
+    "check:skin": "node scripts/selftest-skin.mjs"
   },
   "dependencies": {
     "three": "^0.170.0",
