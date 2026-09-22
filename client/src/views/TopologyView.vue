@@ -33,11 +33,11 @@ onBeforeUnmount(() => {
   <div class="topology">
     <div ref="viewport" class="tp-viewport" />
     <div class="tp-legend">
-      <span class="lg"><i class="lg-dot ok" />链路正常</span>
-      <span class="lg"><i class="lg-dot warn" />延迟/丢包警告</span>
+      <span class="lg"><i class="lg-dot ok" />设备正常</span>
+      <span class="lg"><i class="lg-dot warn" />设备告警</span>
       <span class="lg"><i class="lg-dot crit" />严重</span>
-      <span class="lg"><i class="lg-dash" />断链 / 无数据</span>
-      <span class="lg tp-hint">方块=设备状态 · 底座=链路 · 脉冲速率=延迟倒数 · 点击方块钻取</span>
+      <span class="lg"><i class="lg-dash" />离场 / 失联</span>
+      <span class="lg tp-hint">外形=机型档位 · 色相=状态 · 亮度=负载 · 点击机体钻取</span>
     </div>
     <div v-if="!hosts.length" class="tp-empty">暂无节点，等待 Agent 上报…</div>
   </div>

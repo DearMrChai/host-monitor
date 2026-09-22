@@ -14,7 +14,7 @@ import { sortHostsForOverview, deviceLevel, displayName, isAbsent, shortName, lo
  * 不能改口径".
  *
  * Sorting is pre-applied because both layouts are positional: the caller's order
- * is the order around the circle (and down the wall), so it has to be deterministic.
+ * is the seat order along the shelf (and down the wall), so it has to be deterministic.
  */
 export function topologyViewModel(hosts, opts = {}) {
   const { nameMax = 0 } = opts
