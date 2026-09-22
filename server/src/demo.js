@@ -63,7 +63,7 @@ function frame(hostId, hostname, opts) {
   }
 }
 
-/** The four props: healthy, busy-but-fine, one WARN, and one absent ephemeral. */
+/** The five props: healthy, busy-but-fine, one WARN, one live 笔记本形态, one absent ephemeral. */
 const SCENARIO = [
   {
     host_id: 'sim-vectordb', hostname: 'sim-vectordb', display: '模拟-向量库机',
@@ -86,6 +86,16 @@ const SCENARIO = [
     role: 'display', presence_class: 'persistent',
     spec: () => ({ platform: 'Debian 12', cores: 8, freq: 2800, cpu: 9, mem: 33, memTotal: 16,
       disks: [{ m: '/', t: 228, p: 44 }, { m: '/media', t: 7450, p: 86 }], uptime: 1296000 }),
+  },
+  {
+    // V3 包 3 步 2 · 判据① 的复测对象（任务书 §5.3 裁定 3 授权的这一处改动）：
+    // 墙上需要一台**活着报数**的笔记本形态机器，形状轴才不是被一台离场道具验的。
+    // 指标全压在 warn 线下（cpu 21 → 温度约 53 / mem 55 / 盘 47·33），它是来陈列的，
+    // 不是来演示告警的 —— 那两件事 sim-media 与 sim-tmpnote 已经各自负责。
+    host_id: 'sim-notebook', hostname: 'sim-notebook', display: '模拟-笔记本道具',
+    role: 'laptop', presence_class: 'persistent',
+    spec: () => ({ platform: 'Windows 11', cores: 12, freq: 2400, cpu: 21, mem: 55, memTotal: 16,
+      disks: [{ m: 'C:', t: 954, p: 47, fs: 'NTFS' }, { m: 'D:', t: 1907, p: 33, fs: 'NTFS' }], uptime: 21600 }),
   },
   {
     // One frame then silence: the ABSENT card path (ephemeral offline), which is
