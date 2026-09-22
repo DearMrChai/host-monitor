@@ -25,6 +25,12 @@ export function topologyViewModel(hosts, opts = {}) {
     linkLevel: h.status?.components?.link?.level || null,
     online: !!h.online,
     absent: isAbsent(h),
+    /* V3 假辉光·案甲 (任务书 §5.1): the scene's one brightness channel reads this
+       number, so it travels with the record instead of being recomputed downstream
+       - `loadOf` is the repo's only 负载 口径 and a second max() in a renderer is
+       exactly how the wall and the scene start disagreeing about who is busy.
+       -1 means "no metrics", not "idle"; consumers must keep those apart. */
+    load: loadOf(h),
     links: (h.status?.components?.link?.targets || []).map(t => ({
       key: t.target, name: t.name, rtt: t.rtt_ms, loss: t.loss_pct, level: t.level,
     })),

@@ -232,7 +232,7 @@ export class ClusterTopologyRenderer {
   /* ---------- data update ---------- */
 
   /**
-   * nodes: [{ id, name, deviceLevel, linkLevel, online, absent,
+   * nodes: [{ id, name, deviceLevel, linkLevel, online, absent, load,
    *           links: [{ key, name, rtt, loss, level }] }]
    */
   update(nodes) {
@@ -260,7 +260,17 @@ export class ClusterTopologyRenderer {
          readable without adding a fifth status colour. */
       rec.group.scale.setScalar(n.absent ? 0.72 : 1)
       const devColor = n.absent ? ABSENT : n.online ? (LC[n.deviceLevel] ?? LC.OK) : LC.OFFLINE
+      /* V3 假辉光·案甲 (任务书 §5.1): the body's own colour doubles as its
+         emissive, exactly like A1's PCB traces (`TopologyRenderer.js:809-815`) -
+         no second colour enters the scene, so this adds no new hue to a channel
+         R-1 has already spent. Both setters ride the same push, because
+         `devColor` changes every update: a body that goes CRIT while its
+         emissive still holds last push's green is "one fact, two homes" with an
+         alarm on top of it. Intensity is derived from `load` here and never
+         accumulated (`TopologyRenderer.js:1043-1052` records that drift). */
       rec.bodyMat.color.setHex(devColor)
+      rec.bodyMat.emissive.setHex(devColor)
+      rec.bodyMat.emissiveIntensity = glowIntensity(n)
       rec.baseMat.color.setHex(n.linkLevel ? (LC[n.linkLevel] ?? GRAY) : GRAY)
       const serverLink = n.links.find(l => l.key === 'server')
       const rttTxt = n.absent ? '离场（临时节点，不报警）'
@@ -281,7 +291,18 @@ export class ClusterTopologyRenderer {
     base.position.y = -0.55
     base.userData.hostId = n.id
     group.add(base)
-    const bodyMat = new THREE.MeshStandardMaterial({ color: LC.OK, roughness: 0.55, flatShading: true })
+    /* The body is born dark (intensity 0): `update()`, the same pass that
+       creates it, is the only place that decides how busy a machine looks -
+       never `_animate()`, because this glow is a reading, not an event.
+       `emissive` is seeded to the same value as `color` so the two can never be
+       observed disagreeing, which is the entire premise of 案甲. */
+    const bodyMat = new THREE.MeshStandardMaterial({
+      color: LC.OK,
+      roughness: 0.55,
+      flatShading: true,
+      emissive: LC.OK,
+      emissiveIntensity: 0,
+    })
     const body = new THREE.Mesh(new THREE.BoxGeometry(1.5, 1.2, 1.5), bodyMat)
     body.position.y = 0.15
     body.userData.hostId = n.id
@@ -510,4 +531,24 @@ export class ClusterTopologyRenderer {
 function pulseSpeed(rtt) {
   if (rtt == null) return 0.35
   return Math.min(1.2, Math.max(0.12, 1.2 / (1 + rtt / 15)))
+}
+
+/* V3 假辉光·案甲 (任务书 §5.1) — 机体亮度 = 负载的一维读数，不是事件。
+ *
+ * -1 from `loadOf` 是「没有指标」，不是「0% 负载」，所以两者必须长得不一样：
+ *   无数据 -> 0（机体哑掉，色表 R-2 的「更暗 = 这里没信息」）。把它当 0% 处理就是
+ *   让「没数据」冒充「很闲」，这一刀最不能接受的错。
+ * - 离场 / 失联同样为 0：不在场的机器没有「忙不忙」这回事。
+ * - 上限 0.30（load >= 100 时取到）是刻意压住的：emissive 加的是与朝向无关的常量项，
+ *   抬高了会冲平前置 4.0 刚买回来的面明暗（受光面 1.35 / 背光面 0.65，层次比 2.08）——
+ *   层次靠面（R-3），辉光不吃层次。
+ * - 纯函数、只依赖当次推送的 `load`：无时间项、无自累加（H30 的动效通道不在本刀）。
+ * - `load` 缺失/非数字同样为 0，绝不把 NaN 写进材质。 */
+const GLOW_FLOOR = 0.05   // 有数据但空载
+const GLOW_SPAN = 0.25    // 0 -> 满负载，天花板 0.30
+
+function glowIntensity(n) {
+  const load = n.load
+  if (n.absent || !n.online || !Number.isFinite(load) || load < 0) return 0
+  return GLOW_FLOOR + (Math.min(100, Math.max(0, load)) / 100) * GLOW_SPAN
 }
