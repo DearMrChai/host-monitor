@@ -426,8 +426,13 @@ onBeforeUnmount(() => {
 /* Unscoped on purpose: the CSS2D label divs are created inside three.js and
    appended to the container, so they never receive this component's scope
    attribute. The plate has to reach the L0 floor here too - 11px is a reading
-   distance the kiosk does not have. */
+   distance the kiosk does not have.
+   包 2 步 2 起这一份**只管字号**：牌面的版式（机名块与状态块怎么分开）收在
+   style.css 的 `.topo-host` 里，用 em 跟着字走，所以这里原来那句
+   `.tl-sub { margin-top: 3px }` 删掉了——同一段空写两个家，改一次要记得改两处。
+   为什么字号还留在这里：`:root` 里没有任何字号 token（逐行核过），而本轮的约束是
+   "不许自己造一档字号"，所以 20/15 这两档既不上收到 token、也不新增一档。 */
 [data-kiosk] .topo-label { padding: 6px 14px; border-radius: 8px; }
 [data-kiosk] .topo-label .tl-name { font-size: 20px; }
-[data-kiosk] .topo-label .tl-sub { font-size: 15px; margin-top: 3px; }
+[data-kiosk] .topo-label .tl-sub { font-size: 15px; }
 </style>

@@ -592,5 +592,116 @@ const GEO = {}
   else bad('牌面文案被改了', wrong.join('; '))
 }
 
+/* ==========================================================================
+   V3 包 2 步 2 · 牌面排版的边界
+   --------------------------------------------------------------------------
+   步 2 只改版式（style.css 的 `.topo-host` 那一族 ＋ KioskView 那三条 `[data-kiosk]
+   .topo-label` 之一），所以这里量的全是"排版有没有越界"：
+     - 越到 A1 的芯片标签上（详情页本轮一行不碰）；
+     - 越到第二个家（同一份间距在 kiosk 那份里再写一遍）；
+     - 越到颜色／字号／图形上（本轮不许自创色值、不许新增一档字号、不许发明识别特征）。
+   全部从 CSS 源文算，不用浏览器；读法一律先剥注释，再按 `selector { body }` 切块。
+   每条「零命中」都带同一条模式的正对照（色表纪律 R-6）。
+   ========================================================================== */
+
+const stripCss = (text) => text.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+const cssRules = (text) => [...stripCss(text).matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+  .map((m) => ({ sel: m[1].trim().replace(/\s+/g, ' '), body: m[2] }))
+  .filter((r) => !r.sel.startsWith('@'))
+const plateRulesOf = (rules) => rules.filter((r) => /\.tl-(name|sub)|\.topo-label|\.topo-host/.test(r.sel))
+/** 只在**牌面族**的选择器里找带某属性的规则（分块间距／装饰／字号各一条判据共用）。 */
+const plateDeclaring = (rules, prop) => rules.filter((r) => new RegExp(prop).test(r.body))
+
+const STYLE_CSS = readSrc('style.css')
+const KIOSK_VUE = readSrc('views/KioskView.vue')
+const STYLE_PLATE = plateRulesOf(cssRules(STYLE_CSS))
+const KIOSK_PLATE = plateRulesOf(cssRules(KIOSK_VUE))
+const PLATE_RULES = STYLE_PLATE.concat(KIOSK_PLATE)
+
+{
+  /* 「机名与状态一眼分开」= 两块之间有一条边界。边界只许由 `.topo-host` 那一条画：
+     基规则 `.topo-label .tl-sub` 是 A0 与 A1 共用的，往它身上加间距就改了详情页。 */
+  const SPLIT = /margin-top|padding-top|border-top/
+  const splitters = plateDeclaring(STYLE_PLATE, SPLIT.source)
+  /* 判法不是"基规则里不许出现 margin-top"——`.topo-label .tl-sub{margin-top:2px}` 是
+     A1 芯片标签的现值，本轮一行不碰详情页，删它就等于改了 A1 的行距。判的是**机体牌
+     身上这一格谁说了算**：非 `.topo-host` 规则声明的每一个分块属性，都必须被某条
+     `.topo-host` 规则同名覆盖（`.topo-label.topo-host .tl-sub` 特异性 0,3,0 >
+     `.topo-label .tl-sub` 0,2,0，且写在它后面），否则 A0 的版式就有第二个家。 */
+  const leaf = (sel) => (sel.match(/\.tl-(?:name|sub)/) || ['(整块牌面)'])[0]
+  const splitProps = (body) => [...body.matchAll(/\b(margin-top|padding-top|border-top)\b/g)].map((m) => m[1])
+  const ownership = {}
+  for (const r of STYLE_PLATE) {
+    const props = splitProps(r.body)
+    if (!props.length) continue
+    const k = leaf(r.sel)
+    const slot = (ownership[k] ||= { host: new Set(), other: new Set() })
+    slot[r.sel.includes('topo-host') ? 'host' : 'other'].add(...props)
+  }
+  const uncovered = Object.entries(ownership)
+    .flatMap(([k, v]) => [...v.other].filter((p) => !v.host.has(p)).map((p) => `${k}{${p}}`))
+  const control = plateDeclaring(cssRules(STYLE_CSS), SPLIT.source).length
+  if (control === 0) bad('分块规则不越界到 A1', '尺子失效——整个 style.css 里量不到任何 margin/padding/border-top 声明')
+  else if (uncovered.length) bad('分块规则不越界到 A1', `机体牌上这些分块属性仍由共用规则说了算：${uncovered.join(' / ')}——要么收进 .topo-host，要么被同名覆盖`)
+  else if (!splitters.some((r) => /border-top/.test(r.body))) bad('机名与状态没有真的分开', '牌面族里找不到一条 border-top——只有空没有线，两块还是会被读成一行')
+  else ok(`分块规则不越界到 A1：${Object.keys(ownership).length} 个牌面块（${Object.keys(ownership).join(' / ')}）的分块属性全部由 .topo-host 说了算——被同名覆盖的共用声明：${Object.entries(ownership).flatMap(([k, v]) => [...v.other].map((p) => `${k}{${p}}`)).join(' / ') || '无'}（A1 的现值因此没被删，只是不再管机体牌）（正对照：同一条模式在 style.css 全文命中 ${control} 条，含 .en-codelist／.k-bottom 这些既有分块），且分隔线确实画了一条 1px var(--border)`)
+}
+
+{
+  /* 版式只有一个家：kiosk 那份 `[data-kiosk] .topo-label` 从步 2 起只管字号与外框，
+     机名块/状态块之间的空回到 style.css 那一条（用 em 跟着字走）。
+     这里数的是**分块间距**，不是外框 padding：`padding: 6px 14px` 是牌子自己的外框，
+     墙上要厚一点是它的事，与"两块怎么分开"不是同一个事实。 */
+  const kioskPlate = KIOSK_PLATE
+  const dup = kioskPlate.filter((r) => /margin-top|padding-top|border-top/.test(r.body))
+  const control = kioskPlate.filter((r) => /font-size/.test(r.body)).length
+  if (control === 0) bad('牌面间距只有一个家', '尺子失效——KioskView 里量不到任何牌面字号规则，那这条"没有间距"什么也没说')
+  else if (dup.length) bad('牌面间距只有一个家', `kiosk 那份又写了分块间距：${dup.map((r) => `${r.sel}{${r.body.trim()}}`).join(' / ')}`)
+  else ok(`牌面间距只有一个家：KioskView 的牌面规则 ${kioskPlate.length} 条里 0 条分块间距（正对照：同族规则里有 ${control} 条在写字号，说明这条尺子看得见这个块）`)
+}
+
+{
+  /* 两条"不许"一起量：本轮不上字体文件、也不新增一档字号；色值只许走 token。
+     字号那半边是个**集合**判据——沿用动手前那四档（style.css 11/9 ＋ kiosk 20/15），
+     多出来的任何一档都会让它 FAIL，因为 `:root` 里根本没有字号 token 可以收（已核）。 */
+  const SIZES_BEFORE = ['11px', '15px', '20px', '9px']       // 包 2 步 2 动手前从 HEAD 量的四档
+  const sizes = [...new Set(PLATE_RULES.flatMap((r) => [...r.body.matchAll(/font-size:\s*([^;}]+)/g)].map((m) => m[1].trim())))].sort()
+  const COLOR = /#[0-9a-fA-F]{3,8}\b|0x[0-9a-fA-F]{6}\b|rgba?\(/
+  const literals = PLATE_RULES.filter((r) => COLOR.test(r.body)).map((r) => r.sel)
+  const control = new Set([...stripCss(STYLE_CSS).matchAll(/font-size:\s*[^;}]+/g)].map((m) => m[0])).size
+  const cssSizes = hitsOf(stripCss(STYLE_CSS), /font-size:/)
+  const kioskSizes = hitsOf(stripCss(KIOSK_VUE), /font-size:/)
+  const wrong = []
+  if (cssSizes === 0 || kioskSizes === 0) bad('牌面不新增字号档缺正对照', `同一条模式在 style.css 量到 ${cssSizes} 条、KioskView 量到 ${kioskSizes} 条字号声明——有一边是瞎的，这个集合读数不算数`)
+  else if (control < 4) bad('牌面不新增字号档缺正对照', `style.css 全文只量到 ${control} 档字号，牌面却报了 ${sizes.length} 档——这条尺子不算数`)
+  else if (sizes.join(' ') !== SIZES_BEFORE.join(' ')) wrong.push(`字号集合从「${SIZES_BEFORE.join(' / ')}」变成「${sizes.join(' / ')}」——本轮不许自己造一档（要新 token 得停下来报告）`)
+  if (literals.length) wrong.push(`牌面规则里出现自创色值：${literals.join(' / ')}`)
+  if (!wrong.length) ok(`牌面不加字号档、不自创色值：牌面族 ${PLATE_RULES.length} 条规则的字号集合仍是 ${sizes.join(' / ')}（正对照：同一条模式在 style.css 命中 ${cssSizes} 条字号声明、KioskView ${kioskSizes} 条，全文 ${control} 档），色值全部走 var(--…)`)
+  else bad('步 2 越界了', wrong.join('; '))
+}
+
+{
+  /* §7.2：站姿 + 高宽比 + 大小是档间唯一区别，牌面不许发明第四个识别特征——
+     落到 CSS 上就是：不加图形（content/url/渐变/阴影/伪元素/圆点）。 */
+  const DECOR = /content:|url\(|background-image|linear-gradient|radial-gradient|box-shadow|::before|::after|border-radius:\s*50%/
+  const decorated = PLATE_RULES.filter((r) => DECOR.test(r.body)).map((r) => r.sel)
+  const control = hitsOf(readSrc('components/HostCard.vue'), DECOR) + hitsOf(stripCss(STYLE_CSS), DECOR)
+  if (control === 0) bad('牌面不发明识别特征', '尺子失效——同一条模式在仓库里一处也量不到，这个 0 不是读数')
+  else if (decorated.length) bad('牌面发明识别特征了', `${decorated.join(' / ')} 里出现图形／装饰声明：图标、灯点、渐变这一类`)
+  else ok(`牌面不发明识别特征：${PLATE_RULES.length} 条牌面规则 0 处图形声明（正对照：同一条模式在 HostCard.vue ＋ style.css 命中 ${control} 处）——分开两块靠的是空与线，不是新符号`)
+}
+
+{
+  /* 诚实文案的字面只许有一个家：那句「离场（临时节点，不报警）」如果被 CSS 用
+     `content:` 再抄一份，改文案的人就会只找到一处、发出去两份。 */
+  const SENTENCE = '离场（临时节点，不报警）'
+  const inCss = hitsOf(stripCss(STYLE_CSS), new RegExp(SENTENCE)) + hitsOf(stripCss(KIOSK_VUE), new RegExp(SENTENCE))
+  const inRenderer = hitsOf(readCode('three/ClusterTopologyRenderer.js'), new RegExp(SENTENCE))
+  const control = readSrc('lib/plate.js').includes(SENTENCE)
+  if (!control) bad('文案只有一个家', 'lib/plate.js 里反而没有这句话了——牌面小字没了家')
+  else if (inCss || inRenderer) bad('文案只有一个家', `牌面小字被抄进样式（${inCss} 处）或渲染器（${inRenderer} 处），改一处会漏另一处`)
+  else ok(`文案只有一个家：「${SENTENCE}」在 style.css／KioskView／A0 渲染器 0 处（正对照：lib/plate.js 有这一支，且本脚本上面那条判据正从它身上读值）`)
+}
+
 console.log(`\n[selftest-silhouette] pass=${pass} fail=${failures.length}`)
 process.exit(failures.length ? 1 : 0)

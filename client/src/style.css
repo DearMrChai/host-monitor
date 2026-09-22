@@ -218,6 +218,35 @@ html, body, #app {
 .topo-label .tl-name { font-size: 11px; font-weight: 600; color: var(--text); white-space: nowrap; }
 .topo-label .tl-sub { font-size: 9px; color: var(--text2); white-space: nowrap; margin-top: 2px; }
 
+/* 牌面排版 —— V3 包 2 步 2（牌面轴，素材清单 §2「标签牌」那格的验收语：
+   **机名与状态一眼分开**）。
+   上面那两条基规则是 A0 的机体牌和 A1 的芯片标签**共用**的，所以本轮所有版式都收在
+   `.topo-host` 这个修饰符里（`lib/plate.js` 的 ROOT_CLASS 发的那一支）：详情页一行不碰，
+   它的标签读到的还是基规则那一份。
+   三条约束是任务书给的，不是我挑的：
+   - **不发明识别特征**：不加图标、不加 logo、不点一排 LED 点，也不拿 `::before/::after`
+     造形状——§7.2 定死"站姿 + 高宽比 + 大小"是档间唯一区别，牌面上多一排点就是
+     给"这一格是哪台"另开一个家。这里加的只有一条分隔线和一段实空。
+   - **不新造字号档**：本轮不上字体文件（D3 选了 IBM Plex Mono，替换押后），而 `:root`
+     里连一支字号/字族 token 都没有（已逐行核过，见交付说明），所以尺寸沿用现有的
+     11/9（交互页）与 20/15（墙上）；空改用 `em`，跟着**各自那一档的字**放大，
+     墙上和交互页不必各写一份像素值——这也是 KioskView 那条 `.tl-sub{margin-top:3px}`
+     被删掉的原因：版式只有一个家，`[data-kiosk]` 那份只留字号。
+   - **不加色**：分隔线取 `--border`，就是牌子自己那条 1px 边界（R-3 边界靠描边），
+     写法沿用仓库既有的分块法（`.en-codelist`、`.k-bottom` 都是 `border-top: 1px
+     solid var(--border)` + `padding-top`），零自创值。 */
+.topo-label.topo-host .tl-sub {
+  /* 机名块与状态块之间：一段实空 + 一条线。小字的字号是这两段空的尺子（em），
+     所以交互页给 9px 那档约 7.8px 的分块，墙上给 15px 那档约 12.3px。 */
+  margin-top: .4em;
+  padding-top: .35em;
+  border-top: 1px solid var(--border);
+}
+/* 没有小字就没有线：在场且活着的机器牌面上只有一行——状态由机体色相说（图例那条
+   「色相=状态」），不在牌面上重讲一遍。这一格由 `lib/plate.js` 的 `plate-no-status`
+   决定，牌面因此也不会留一条空带子把机名往下推。 */
+.topo-label.topo-host.plate-no-status .tl-sub { display: none; }
+
 /* 部件标签名 → 结构族 §2.5（任务书 §6.2 B 组）。牌面上写的是"这块芯片是什么"，
    所以名字的颜色就是它那一族的身份色，与 3D 线色／图例同一支（palette.STRUCT
    的另一半由 check-tokens 钉住）。
