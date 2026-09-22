@@ -86,10 +86,12 @@ export const SILHOUETTE_TIERS = {
 export const SILHOUETTE_DEFAULT = 'mini'
 
 /**
- * Placeholder tier assignment (V3 包 1). This is a *display* heuristic over the
+ * The **fallback** tier assignment (V3 包 1 时它是唯一的判法；包 4 步 2 之后它降到
+ * silhouetteTierOf 的声明读取之后)。This is a *display* heuristic over the
  * two strings the client already has — `name` (display_name) and `id` (host_id).
  * It is not a fact about the machine and it is not a data source: the honest
- * home is the roster's form-factor column (任务书 B 包 3), which is why nothing
+ * home is the roster's form-factor column `nodes.form_factor` (任务书 §5.5 步 1 已落地，
+ * 服务端可写可读)，which is why nothing
  * here reads the agent, `_guess_host_type` or the server.
  *
  * Per his own naming habit (决策 10 W3: 单机群、按他的场景定制, 收窄不算缺陷) the
@@ -108,10 +110,29 @@ function hasIdToken(id, token) {
 }
 
 /**
- * @param {object} rec a topology view-model record ({ id, name, ... })
+ * 档名的取值顺序（V3 包 4 步 2，任务书 §5.5）：**人声明的优先，猜测降为回落**。
+ *
+ * `rec.form_factor` 是 roster 那一列经快照转过来的**声明**（可空）。它一旦命中就
+ * 直接返回，不再看名字——因为"这台机器是什么形态"是他的陈述，不是可以从机名里
+ * 算出来的事实。下面那张 TIER_HINTS 从此只在**没有声明**的时候工作。
+ *
+ * 什么算命中：值必须是 SILHOUETTE_TIERS 的一个自有键（`Object.hasOwn`，不用 `in`
+ * ——`'constructor' in {}` 是真的，那会让一个乱填的值拿到一个"看起来合法"的档）。
+ * 不认识的值**不等于**"声明了第四个形态"，它等于"这条声明我们读不懂"，所以落回
+ * 猜测而不是落回默认档：一台名字叫"XX 机架"而 form_factor 被填成 `rack-2u` 的机器，
+ * 猜成 rack 是对的，静默画成微型方盒是错的（画错了墙上看不出来，正是 H34 那一族）。
+ *
+ * 值域仍是那三档，没有第四档：本函数不新增档、不改任何几何参数（机架 1:8 与他钉的
+ * 四档字号都不在这一层）。
+ *
+ * @param {object} rec a topology view-model record ({ id, name, form_factor, ... })
  * @returns {string} a key of SILHOUETTE_TIERS
  */
 export function silhouetteTierOf(rec) {
+  const declared = rec?.form_factor
+  if (typeof declared === 'string' && Object.hasOwn(SILHOUETTE_TIERS, declared.trim().toLowerCase())) {
+    return declared.trim().toLowerCase()
+  }
   const name = String(rec?.name ?? '').toLowerCase()
   const id = String(rec?.id ?? '').toLowerCase()
   for (const hint of TIER_HINTS) {

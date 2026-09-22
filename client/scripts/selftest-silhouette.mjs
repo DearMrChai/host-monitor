@@ -761,5 +761,145 @@ const PLATE_RULES = STYLE_PLATE.concat(KIOSK_PLATE)
   else bad('每一处 blur 都有主人', wrong.join('; '))
 }
 
+/* ==========================================================================
+   V3 包 4 步 2 · 档名的取值顺序：声明优先，猜测降为回落（任务书 §5.5 步 2）
+   --------------------------------------------------------------------------
+   上面那一条"档名纯函数 silhouetteTierOf(record)：7 例全命中"是**包 1 的临时家**
+   留下的判据，本块**只追加**、没动它一根手指（色表纪律 R-6 ＋ §6"永不重写"第 2 条）。
+
+   这一块要买的不是"函数还能跑"，而是一条方向：**声明能不能压过猜测**。
+   所以每条判据都配一个反方向的对照——同一台机器把声明撤掉必须回到原来的读数，
+   否则"声明命中即用"可能只是"猜对了"的另一种写法（永真式）。
+   ========================================================================== */
+
+{
+  /* ① 声明命中即用：三档各自声明、名字故意留空，读数必须来自声明而不是默认档。
+        （名字留空是关键：全给空名的话 mini 那一档就成了"回落也恰好对"的假读数。） */
+  const declared = [['laptop', '', ''], ['mini', '', ''], ['rack', '', '']]
+  const wrong = declared.filter(([tier]) => silhouetteTierOf({ id: 'zz', name: '', form_factor: tier }) !== tier)
+  if (!wrong.length) ok(`包 4 声明优先：三档逐个声明（名字全空）都按声明走（${declared.map(([t]) => t).join('/')}）`)
+  else bad('声明没被读到', `这些档声明后读不回来：${wrong.map(([t]) => t).join(', ')}`)
+}
+
+{
+  /* ② 派单点名的**关键正对照**：display_name 里写着"笔记本"、声明却是 rack。
+        这条不通就说明猜测路径还在压过声明——而它在墙上是看不出来的，因为名字里
+        带形态词的机器恰好只有一两台。
+        对照（同一台机器、只撤掉声明）必须回到 laptop：证明名字确实在被猜，
+        上面那个 rack 是声明挣来的，不是蒙的。 */
+  const rec = { id: 'sim-notebook', name: '模拟-笔记本道具', form_factor: 'rack' }
+  const got = silhouetteTierOf(rec)
+  const without = silhouetteTierOf({ id: rec.id, name: rec.name })
+  if (got === 'rack' && without === 'laptop') {
+    ok(`声明压过名字（关键正对照）：「${rec.name}」声明 rack → ${got}；同机撤掉声明 → ${without}（猜测路径仍在，只是降了一级）`)
+  } else bad('声明与猜测的先后顺序不对', `声明时 ${got}（应 rack）、撤声明 ${without}（应 laptop）`)
+}
+
+{
+  /* ③ 无声明时逐例回落，且**与包 4 之前的读数一字不差**。
+        host_id 是真名（demo.js 的 SCENARIO 与 probes.json 的 infer-142），
+        display_name 取任务书 §2 假快照的命名法（srv-231 那条用 'mini-231'）。
+        这一条是"改顺序不能顺手改结果"的闸：任何一台机器今天画成什么，
+        没声明的人就得继续画成什么。 */
+  const TODAY = [
+    ['sim-notebook', '模拟-笔记本道具', 'laptop'],
+    ['sim-vectordb', '模拟-向量库机', 'mini'],
+    ['sim-tmpnote', '模拟-临时笔记本', 'laptop'],
+    ['infer-142', 'ryzen5600-142', 'rack'],
+    ['srv-231', 'mini-231', 'mini'],
+  ]
+  const drift = []
+  for (const [id, name, want] of TODAY) {
+    for (const [label, ff] of [['null', null], ['空串', ''], ['未带这个键', undefined]]) {
+      const got = silhouetteTierOf({ id, name, ...(ff === undefined ? {} : { form_factor: ff }) })
+      if (got !== want) drift.push(`${id} 声明=${label} → ${got}，应为 ${want}`)
+    }
+  }
+  if (!drift.length) ok(`无声明回落与今天逐例相同：${TODAY.length} 台 × 3 种"没声明"的写法（null／空串／键不存在）共 ${TODAY.length * 3} 读全等`)
+  else bad('回落结果漂了', drift.join('; '))
+}
+
+{
+  /* ④ 不认识的值不算"第四档"：它算"这条声明我们读不懂"，落回**猜测**而不是落回默认档。
+        一台名字写着"机架"而值填成 rack-2u 的机器，猜成 rack 是对的、静悄悄画成微型方盒
+        是错的（H34 那一族：错了没人报错）。对照：值拼错且名字里没形态词 → 才落默认档。 */
+  const typo = silhouetteTierOf({ id: 'x99-rack', name: 'X99 机架', form_factor: 'rack-2u' })
+  const typoNoHint = silhouetteTierOf({ id: 'odd-box', name: 'OddBox', form_factor: 'tower' })
+  const allKeys = Object.keys(SILHOUETTE_TIERS)
+  if (typo === 'rack' && allKeys.includes(typoNoHint) && typoNoHint === SILHOUETTE_DEFAULT) {
+    ok(`读不懂的声明落回猜测不落回默认档：'rack-2u'+名字含"机架" → ${typo}；'tower'+无名 → ${typoNoHint}（默认档），且返回值永远是已知的三档之一`)
+  } else bad('未知声明值的处置不对', `rack-2u → ${typo}（应 rack）、tower → ${typoNoHint}（应 ${SILHOUETTE_DEFAULT}）`)
+}
+
+{
+  /* ⑤ 值域没有第四档，也不是服务端能造出来的：SILHOUETTE_TIERS 的键集合仍是三档。
+        （派单硬约束："不许发明第四档、不许改任何几何参数"——几何参数由上面
+        "三档两两分得开"那组判据守着，这里只钉"档数"。） */
+  const keys = Object.keys(SILHOUETTE_TIERS).sort()
+  if (keys.join(',') === 'laptop,mini,rack') ok(`形态档仍是三档、没有第四档：${keys.join(' / ')}`)
+  else bad('档数变了（本包无权改）', `实际 ${keys.join(', ')}`)
+}
+
+{
+  /* ⑥ 声明这条路不许被原型链污染：'constructor'/'__proto__'/'toString' 不是档名。
+        判法用 Object.hasOwn 而不是 `in`——`'constructor' in {}` 为真，那样一个乱填的
+        值会拿到"看起来合法"的一档。对照：同一条判法必须仍认三个真档名。 */
+  const polluted = ['constructor', '__proto__', 'toString', 'hasOwnProperty']
+  const leaked = polluted.filter((v) => !Object.keys(SILHOUETTE_TIERS).includes(silhouetteTierOf({ id: 'plain-box', name: 'PlainBox', form_factor: v })))
+  const real = ['laptop', 'mini', 'rack'].every((t) => silhouetteTierOf({ id: 'plain-box', name: 'PlainBox', form_factor: t }) === t)
+  if (!leaked.length && real) ok(`声明读法不吃原型链：${polluted.join('/')} 全部落回猜测（正对照：三个真档名照常命中，且真档名用 hasOwn 判）`)
+  else bad('声明读法被原型链污染', `这些值当成了档名：${leaked.join(', ')}`)
+}
+
+{
+  /* ⑦ 规范化：服务端 setProfile 已把值 trim + 小写，但客户端不依赖它——
+        这一列还可能由 SQL 直接写、由旧版服务端送来。 */
+  const got = silhouetteTierOf({ id: 'a', name: 'zz', form_factor: ' RACK ' })
+  if (got === 'rack') ok('声明按 trim＋小写规范化后命中（\' RACK \' → rack）：不依赖服务端已清洗')
+  else bad('声明未规范化', `' RACK ' → ${got}`)
+}
+
+/* ⑨ 两屏同源（派单步 2 的"?kiosk 与桌面两条路都跑一次档名"）。
+   静态稿阶段跑不了浏览器，所以这一条量的不是"我看过了"，而是**那条路只有一个家**：
+   两条路都得经过 topologyViewModel → ClusterTopologyRenderer → silhouetteTierOf，
+   并且客户端没有第二处自己判档。谁另起一判，两屏就会在"这台是什么形态"上分家——
+   正是 S4 §2.2 立 topologyViewModel 时要杀的那个形状。 */
+{
+  const callsVm = (rel) => /topologyViewModel\(/.test(readSrc(rel))
+  const consumers = ['three/ClusterTopologyRenderer.js', 'three/TopologyRenderer.js', 'views/KioskView.vue',
+    'views/TopologyView.vue', 'views/DetailView.vue', 'lib/plate.js', 'lib/status.js']
+    .filter((f) => /silhouetteTierOf\s*\(/.test(readSrc(f)))
+  const tierWords = ['three/TopologyRenderer.js', 'views/DetailView.vue']
+    .filter((f) => /TIER_HINTS|'笔记本'|"笔记本"|'机架'|"机架"/.test(readSrc(f)))
+  const okPath = callsVm('views/TopologyView.vue') && callsVm('views/KioskView.vue')
+  if (okPath && consumers.join(',') === 'three/ClusterTopologyRenderer.js') {
+    ok(`两屏同源：桌面(A0)与 ?kiosk 都调 topologyViewModel → 档名只有 ClusterTopologyRenderer 一处消费者`
+      + `（正对照：同一条扫描在 ${consumers.length} 处命中；第二判法 0 处）`)
+  } else bad('档名不再只有一个家', `桌面走 vm=${callsVm('views/TopologyView.vue')}、kiosk 走 vm=${callsVm('views/KioskView.vue')}、消费者=${consumers.join('/') || '无'}`)
+  if (tierWords.length) bad('A1 侧自己长出了形态判法', `${tierWords.join(', ')} 里读到形态关键词字面量，两屏会分家`)
+  else ok(`A1 与牌面侧 0 处第二判法（正对照：形态关键词只存在于 lib/silhouette.js 的那张回落表里）`)
+}
+
+/* ⑧ 只登记、不裁决：声明到得了 A0 吗？
+   silhouetteTierOf 读的是 topologyViewModel 造出来的那条记录，而这条记录目前是
+   一个**字段白名单**（id/name/deviceLevel/linkLevel/online/absent/load/links）。
+   服务端那一列已经过 store.js 的档案族挂到每个 host 上了（步 1 的 H5 钉着），
+   但白名单里没有它 ⇒ **今天墙上的档名仍然全部由猜测决定**。
+   与 H34"看着像旋钮、其实没接线"同形，所以把读数打印出来而不是悄悄过去；
+   要不要补那一行属派单授权范围之外（§5.5【授权收窄】只给了 roster.js 与 store.js
+   两处），交他裁。这条**不是断言**，红绿都不影响本套条数。 */
+{
+  const VM = readSrc('lib/topology-vm.js')
+  /* `[^
+]*` 而不是直接跟 `h\.x`：那一族里写的是 `online: !!h.online`，中间有 `!!`。
+     第一版按 `online:\s*h\.online` 扫，对照读到 0 处＝尺子瞎了，那个 form_factor
+     的 0 就不能算读数（R-6 当场自证了一次）。 */
+  const fwd = (name) => [...VM.matchAll(new RegExp(`^\\s*${name}:\\s*[^\\n]*\\bh\\.${name}(?![\\w])`, 'gm'))].length
+  const ctrl = fwd('online')
+  console.log(`\n[包 4 登记·非判据] topology-vm.js 对 form_factor 的转发 = ${fwd('form_factor')} 处`
+    + `（正对照：同一条扫描读到同族的 online 转发 ${ctrl} 处${ctrl ? '＝尺子看得见这个白名单' : '＝⚠️ 尺子瞎了，左边那个数不算读数'}）。`
+    + `\n                  ⇒ 0 处意味着：服务端声明现在到不了 A0，档名仍全靠猜。补那一行不在本包授权内，交他裁。`)
+}
+
 console.log(`\n[selftest-silhouette] pass=${pass} fail=${failures.length}`)
 process.exit(failures.length ? 1 : 0)
