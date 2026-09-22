@@ -2,16 +2,23 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js'
 import { STATE, NEUTRAL, GROUND, LIGHTING, toRGB } from '../lib/palette.js'
+import { SHELF, silhouetteSize, silhouetteTierOf, shelfGrid } from '../lib/silhouette.js'
 
 /**
- * ClusterTopologyRenderer (P3 / V1.5 star topology)
- * =================================================
- * Server hub block at center, gateway block beside it, fleet nodes on a
- * ring. Each node draws one edge per probe target: edge color = link
- * level (green/yellow/red), gray dashed = down (100% loss) or no data.
- * A pulse dot travels node->endpoint with speed ~ 1/RTT.
- * Block top color = device level, base slab color = link level, so
- * "device problem vs link problem" is readable on one glance.
+ * ClusterTopologyRenderer (V3 包 1 / 陈列架 A0)
+ * =============================================
+ * The fleet as 一排机位 on a shelf: one slot per host, each host drawn at its
+ * own real proportions from `lib/silhouette.js` (三档卧式剪影: 薄板 / 方盒 / 超宽).
+ *
+ * What this scene no longer draws, and why (任务书 B §1.3, 裁定 §5.3-2): the hub
+ * block, the gateway block, the probe-target stubs, the edges and the pulse dots
+ * on them are gone. 链路 was a second reading on the same wall and it never
+ * carried a decision (M6 注销); the link detail lives one click deeper, in A1.
+ * The `linkLevel` / `links` fields of the view-model stay untouched - the 详情页
+ * still reads them, so the withdrawal is a rendering decision, not a contract edit.
+ *
+ * One host = 站姿 + 高宽比 + 大小 (身份) + 面色 (状态) + 亮度 (负载). Nothing else:
+ * 挂耳/格栅/灯点/logo 不当识别特征 (§7.2), 发光与描边不承载身份 (§5.3-甲档).
  */
 
 /* S4 §1.2: state and ground colours come from lib/palette.js, because the DOM's
@@ -28,9 +35,6 @@ const GRAY = toRGB(NEUTRAL.noData)
    it carries no alarm (S1 §3.2 — deliberately not a fifth status level). */
 const ABSENT = toRGB(NEUTRAL.absent)
 
-const HUB_POS = new THREE.Vector3(0, 1.1, 0)
-const GW_POS = new THREE.Vector3(3.4, 0.6, 0)
-
 export class ClusterTopologyRenderer {
   /**
    * opts.interactive - OrbitControls + click picking (off in kiosk: a wall nobody
@@ -45,16 +49,12 @@ export class ClusterTopologyRenderer {
     this.container = container
     this.interactive = interactive
     this.fpsCap = fpsCap
-    this.nodes = new Map()   // host_id -> { group, bodyMat, baseMat, labelEl, pos }
-    this.stubs = new Map()   // target id -> { group, labelEl } for unmatched probe targets
-    this._stubSlot = 0       // monotonic, so a recreated stub never lands on a survivor
-    this.edges = []          // { line, mat, pulse, from, to, rtt, phase }
-    this._edgeSig = ''
+    this.nodes = new Map()   // host_id -> { group, body, base, bodyMat, baseMat, label, labelEl, tier }
+    this._framedOnce = false // 交互页只在第一次推送时取景，之后不跟操作者的轨道抢镜头
     this._clock = new THREE.Clock()
     this._downPt = null
     this._visible = true
     this._contextLost = false
-    this._t = 0            // own clock: see _animate's getDelta() note
     this._acc = 0          // fpsCap accumulator
     this.onNodeClick = null  // (hostId) => void
     this.onFrame = null      // () => void - the kiosk's fps sampler lives here
@@ -63,7 +63,6 @@ export class ClusterTopologyRenderer {
 
     this._initRenderer()
     this._initScene()
-    this._buildFixed()
 
     this._animate = this._animate.bind(this)
     this._raf = requestAnimationFrame(this._animate)
@@ -156,7 +155,10 @@ export class ClusterTopologyRenderer {
 
     this.camera = new THREE.PerspectiveCamera(
       42, (this.container.clientWidth || 800) / (this.container.clientHeight || 600), 0.1, 200)
-    this.camera.position.set(0, 16, 21)
+    /* 陈列架机位：yaw 恒为 0（正视，剪影的宽高比不被透视剪切掉——甲档裁的是"不做斜视角"），
+       只留 tiltRatio 那点俯角。第一次 update() 由 _fitShelf 按容器重算，这里的初值只是
+       为了在取景之前也是一台陈列架相机，不是原来那台 37° 俯拍的环形相机。 */
+    this.camera.position.set(0, 1 + 21 * SHELF.tiltRatio, 21)
 
     /* Read-only in kiosk: a wall nobody touches must not be able to end up
        rotated into an unreadable angle, and skipping the control drops a
@@ -203,25 +205,6 @@ export class ClusterTopologyRenderer {
     this._resize()
   }
 
-  _buildFixed() {
-    this.hub = this._makeBlock('Server\n监控中枢', HUB_POS, 2.4, 2.2, 2.4, 0x6b7a8f)
-    this.gw = this._makeBlock('网关', GW_POS, 1.6, 1.1, 1.6, 0x8f9a7a)
-  }
-
-  _makeBlock(text, pos, bw, bh, bd, color) {
-    const group = new THREE.Group()
-    const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.6, flatShading: true })
-    const body = new THREE.Mesh(new THREE.BoxGeometry(bw, bh, bd), mat)
-    body.position.y = bh / 2
-    group.add(body)
-    group.position.copy(pos)
-    const label = new CSS2DObject(this._labelDiv(text.split('\n')[0], text.split('\n')[1] || ''))
-    label.position.set(0, bh + 0.7, 0)
-    group.add(label)
-    this.scene.add(group)
-    return { group, mat, body, labelEl: label.element }
-  }
-
   _labelDiv(name, sub) {
     const div = document.createElement('div')
     div.className = 'topo-label'
@@ -234,27 +217,34 @@ export class ClusterTopologyRenderer {
   /**
    * nodes: [{ id, name, deviceLevel, linkLevel, online, absent, load,
    *           links: [{ key, name, rtt, loss, level }] }]
+   * 只读 id / name / deviceLevel / online / absent / load。
+   * linkLevel 与 links 仍在推送里（详情页要用），本场景不再消费它们——见文件头。
    */
   update(nodes) {
     this._nodeList = nodes
     const ids = new Set(nodes.map(n => n.id))
-    for (const [id, n] of this.nodes) {
-      if (!ids.has(id)) { this._disposeObject(n.group); this.nodes.delete(id) }
+    for (const [id, rec] of this.nodes) {
+      if (!ids.has(id)) { this._disposeObject(rec.group); this.nodes.delete(id) }
     }
 
-    // stable ring layout (caller pre-sorts for deterministic order)
-    const R = Math.max(6.5, nodes.length * 2.3)
-    if (!this.interactive) this._fitRadius(R)
+    /* 陈列架排版（任务书 B §1.1）：站一排，每格 SHELF.slotWidthPx(240px) 量级；
+       容器宽度装不下 maxSlotsPerRow 格即折第二排（往上层，前排不遮后排）。
+       折行阈值 960px = maxSlotsPerRow × slotWidthPx，是 shelfGrid() 里一个 floor()，
+       可核对，见 lib/silhouette.js。调用方预排序，故席位顺序确定。 */
+    const { cols } = shelfGrid(nodes.length, this.container.clientWidth || 800)
+    let halfW = 0
+    let topY = 0
+    let bottomY = Infinity
     nodes.forEach((n, i) => {
-      const a = (i / nodes.length) * Math.PI * 2 - Math.PI / 2
-      const pos = new THREE.Vector3(Math.cos(a) * R, 0.7, Math.sin(a) * R)
+      const x = ((i % cols) - (cols - 1) / 2) * SHELF.slotPitchWorld
+      const y = SHELF.baseY + Math.floor(i / cols) * SHELF.rowPitchWorld
       let rec = this.nodes.get(n.id)
       if (!rec) {
         rec = this._makeNode(n)
         this.nodes.set(n.id, rec)
       }
-      rec.group.position.copy(pos)
-      rec.pos = pos
+      this._applyTier(rec, n)
+      rec.group.position.set(x, y, 0)
       /* S1b ABSENT: a temporary node that left is not an incident, so it must
          not wear the same grey as a lost persistent node. Lighter + shrunk is
          readable without adding a fifth status colour. */
@@ -271,24 +261,61 @@ export class ClusterTopologyRenderer {
       rec.bodyMat.color.setHex(devColor)
       rec.bodyMat.emissive.setHex(devColor)
       rec.bodyMat.emissiveIntensity = glowIntensity(n)
-      rec.baseMat.color.setHex(n.linkLevel ? (LC[n.linkLevel] ?? GRAY) : GRAY)
-      const serverLink = n.links.find(l => l.key === 'server')
-      const rttTxt = n.absent ? '离场（临时节点，不报警）'
-        : !n.online ? '失联'
-        : serverLink ? (serverLink.rtt != null ? `↘${serverLink.rtt}ms 丢${serverLink.loss}%` : `↘— 丢${serverLink.loss}%`)
-        : '链路无数据'
+      const size = silhouetteSize(rec.tier)
+      const bodyTopY = y - SHELF.bodySeatY + size.height
+      halfW = Math.max(halfW, Math.abs(x) + size.width / 2)
+      topY = Math.max(topY, bodyTopY + SHELF.labelAboveBody + SHELF.plateHalfHeight)
+      bottomY = Math.min(bottomY, y - SHELF.bodySeatY - SHELF.plinthThickness / 2)
+      /* 诚实性红线：牌面上那行小字原来写的是 rtt/丢包（链路读数），链路这一维
+         明着撤出墙之后，它只剩"这机器不在场"两种说法——空的那一行不补新话。 */
       rec.labelEl.querySelector('.tl-name').textContent = n.name
-      rec.labelEl.querySelector('.tl-sub').textContent = rttTxt
+      rec.labelEl.querySelector('.tl-sub').textContent =
+        n.absent ? '离场（临时节点，不报警）' : !n.online ? '失联' : ''
     })
 
-    this._rebuildEdges(nodes)
+    /* Kiosk 取景每次都算（容器宽度会变，折行也随之变）；交互页只算第一次，
+       之后镜头归操作者的轨道，不抢回来。 */
+    if (nodes.length && (!this.interactive || !this._framedOnce)) {
+      this._framedOnce = true
+      this._fitShelf(halfW + SHELF.sidePad, topY, bottomY)
+    }
+  }
+
+  /**
+   * One host = one box, sized by its own tier (任务书 B §1.2).
+   * 真比例：几何 = ratio × unit 的绝对值，不随槽口归一化。槽口（SHELF.slotPitchWorld
+   * 3.4 世界单位 = 墙上 240px 一格）只是**席位间距**，不是尺寸的模子：机架档机体
+   * 2.56 宽、笔记本档 1.44、微型档 0.7，三档各是各的，槽口对谁都不改制。
+   * 档变了就换几何并释放旧的——只换 position 会让旧模子留在显存里（S4 §2.4）。
+   */
+  _applyTier(rec, n) {
+    const tier = silhouetteTierOf(n)
+    if (rec.tier === tier) return
+    const { height, width, depth } = silhouetteSize(tier)
+    rec.body.geometry.dispose()
+    rec.body.geometry = new THREE.BoxGeometry(width, height, depth)
+    rec.body.position.y = -SHELF.bodySeatY + height / 2
+    rec.base.geometry.dispose()
+    rec.base.geometry = new THREE.BoxGeometry(
+      width + SHELF.plinthMargin * 2, SHELF.plinthThickness, depth + SHELF.plinthMargin * 2)
+    rec.label.position.y = -SHELF.bodySeatY + height + SHELF.labelAboveBody
+    rec.tier = tier
   }
 
   _makeNode(n) {
+    const tier = silhouetteTierOf(n)
+    const { height, width, depth } = silhouetteSize(tier)
     const group = new THREE.Group()
+    /* 地牌：原来它是「底座 = 链路色」的载体，链路撤出墙之后它只剩一块台板——
+       颜色沿用 GRAY（palette 已有的中性色），不新增也不修改任何色值。
+       厚度 0.22 与「牌顶在组原点下 0.44」是星型时代的现值，数值搬进参数表，
+       好让折行不变量（地牌不撞邻格、标签不压上层牌）能被自检从表里算出来。 */
     const baseMat = new THREE.MeshStandardMaterial({ color: GRAY, roughness: 0.8 })
-    const base = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.22, 2.2), baseMat)
-    base.position.y = -0.55
+    const base = new THREE.Mesh(
+      new THREE.BoxGeometry(
+        width + SHELF.plinthMargin * 2, SHELF.plinthThickness, depth + SHELF.plinthMargin * 2),
+      baseMat)
+    base.position.y = -(SHELF.bodySeatY + SHELF.plinthThickness / 2)
     base.userData.hostId = n.id
     group.add(base)
     /* The body is born dark (intensity 0): `update()`, the same pass that
@@ -303,16 +330,16 @@ export class ClusterTopologyRenderer {
       emissive: LC.OK,
       emissiveIntensity: 0,
     })
-    const body = new THREE.Mesh(new THREE.BoxGeometry(1.5, 1.2, 1.5), bodyMat)
-    body.position.y = 0.15
+    const body = new THREE.Mesh(new THREE.BoxGeometry(width, height, depth), bodyMat)
+    body.position.y = -SHELF.bodySeatY + height / 2
     body.userData.hostId = n.id
     group.add(body)
     const label = new CSS2DObject(this._labelDiv(n.name, ''))
-    label.position.set(0, 1.9, 0)
+    label.position.set(0, -SHELF.bodySeatY + height + SHELF.labelAboveBody, 0)
     group.add(label)
-    group.position.y = 0.7
+    group.position.y = SHELF.baseY
     this.scene.add(group)
-    return { group, body, base, bodyMat, baseMat, labelEl: label.element, pos: group.position }
+    return { group, body, base, bodyMat, baseMat, label, labelEl: label.element, tier }
   }
 
   /* ---------- lifecycle helpers (S4 §2.4) ---------- */
@@ -338,101 +365,24 @@ export class ClusterTopologyRenderer {
     if (obj.parent) obj.parent.remove(obj)
   }
 
-  /** Fixed-frame kiosk: keep the ring inside the viewport as the roster grows. */
-  _fitRadius(R) {
-    // (0,16,21) framed R≈6.5 when the interactive view was designed; preserve
-    // that direction, scale the distance.
-    const base = this._baseDist ?? (this._baseDist = new THREE.Vector3(0, 16, 21).length())
-    const dist = Math.min(60, Math.max(base, R * (base / 6.5)))
-    this.camera.position.setLength(dist)
-    this.camera.lookAt(0, 1, 0)
-  }
+  /* ---------- framing ---------- */
 
-  /* ---------- edges ---------- */
-
-  _endpointOf(link, byId) {
-    if (link.key === 'server') return { pos: HUB_POS.clone().setY(HUB_POS.y + 1.2), name: 'server' }
-    if (link.key === 'gateway') return { pos: GW_POS.clone().setY(GW_POS.y + 0.6), name: 'gw' }
-    const targetNode = byId.get(link.key)
-    if (targetNode) return { pos: targetNode.pos.clone().setY(1.3), name: link.key }
-    // unmatched key host -> small stub behind the gateway
-    let stub = this.stubs.get(link.key)
-    if (!stub) {
-      // Monotonic slot, not stubs.size: a pruned-then-recreated target would
-      // otherwise be laid out on top of a surviving neighbour.
-      const idx = this._stubSlot++
-      const p = new THREE.Vector3(-4.2 - (idx % 4) * 2.2, 0.35, -3.2 - Math.floor(idx / 4) * 2.2)
-      stub = this._makeBlock(`${link.name}\n关键节点`, p, 1.0, 0.7, 1.0, 0xa89f8d)
-      this.stubs.set(link.key, stub)
-    }
-    return { pos: stub.group.position.clone().setY(1.0), name: link.key, stubKey: link.key }
-  }
-
-  _rebuildEdges(nodes) {
-    const byId = new Map(nodes.map(n => [n.id, this.nodes.get(n.id)]))
-    let sig = ''
-    for (const n of nodes) {
-      for (const l of n.links) {
-        sig += `${n.id}|${l.key}|${l.level}|${l.loss >= 100 || l.level == null ? 'g' : 'c'};`
-      }
-    }
-    if (sig === this._edgeSig) {
-      // structure unchanged: just refresh pulse speeds
-      for (const e of this.edges) e.speed = e.pulse ? pulseSpeed(e.rtt) : 0
-      return
-    }
-    this._edgeSig = sig
-    this._clearEdges()
-
-    const used = new Set()
-    for (const n of nodes) {
-      const rec = this.nodes.get(n.id)
-      if (!rec || !n.online) continue
-      const from = rec.pos.clone().setY(1.45)
-      for (const l of n.links) {
-        const ep = this._endpointOf(l, byId)
-        if (ep.stubKey) used.add(ep.stubKey)
-        const down = l.loss >= 100 || l.level == null
-        const color = down ? GRAY : (LC[l.level] ?? LC.OK)
-        const to = ep.pos
-        const lineGeo = new THREE.BufferGeometry().setFromPoints([from, to])
-        let mat, line
-        if (down) {
-          mat = new THREE.LineDashedMaterial({ color, dashSize: 0.35, gapSize: 0.28 })
-          line = new THREE.Line(lineGeo, mat)
-          line.computeLineDistances()
-        } else {
-          mat = new THREE.LineBasicMaterial({ color })
-          line = new THREE.Line(lineGeo, mat)
-        }
-        this.scene.add(line)
-        const pulse = down ? null : new THREE.Mesh(
-          new THREE.SphereGeometry(0.13, 10, 10),
-          new THREE.MeshBasicMaterial({ color }))
-        if (pulse) this.scene.add(pulse)
-        this.edges.push({
-          line, mat, pulse, from, to, rtt: l.rtt,
-          speed: pulse ? pulseSpeed(l.rtt) : 0,
-          phase: Math.random(),
-        })
-      }
-    }
-
-    /* A stub is the picture of "we probe this but it is not on the board". Once
-       nothing draws an edge to it any more - the target node joined the ring, or
-       the probe was removed - the block has to leave with the edge, or the scene
-       fills with monuments to old configuration. */
-    for (const [key, stub] of this.stubs) {
-      if (!used.has(key)) { this._disposeObject(stub.group); this.stubs.delete(key) }
-    }
-  }
-
-  _clearEdges() {
-    for (const e of this.edges) {
-      this._disposeObject(e.line)
-      if (e.pulse) this._disposeObject(e.pulse)
-    }
-    this.edges = []
+  /**
+   * 陈列架取景：把整面架子（含地牌与标签牌）装进容器，yaw 恒 0。
+   * 相机沿 +Z 退到能同时装下宽和高的距离，再按 tiltRatio 抬高——只抬不转，
+   * 所以每台机器的正立面仍垂直于视线，高宽比这个识别特征不被透视剪切。
+   * fov / near / far / maxCameraDistance 都是现值，本包没动它们。
+   */
+  _fitShelf(halfW, topY, bottomY) {
+    const centerY = (topY + bottomY) / 2
+    const halfH = Math.max(0.5, (topY - bottomY) / 2)
+    const tanV = Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2))
+    const aspect = Math.max(0.1, this.camera.aspect)
+    const dist = Math.min(SHELF.maxCameraDistance,
+      Math.max(halfH / tanV, halfW / (tanV * aspect)) * SHELF.fitPadding)
+    this.camera.position.set(0, centerY + dist * SHELF.tiltRatio, dist)
+    this.controls?.target.set(0, centerY, 0)
+    this.camera.lookAt(0, centerY, 0)
   }
 
   /* ---------- picking ---------- */
@@ -466,26 +416,19 @@ export class ClusterTopologyRenderer {
   _animate() {
     this._raf = requestAnimationFrame(this._animate)
     /* getDelta() is read on *every* rAF, cap or no cap: it is the time since the
-       previous call, so a skipped frame still counts toward the pulse positions.
-       Sampling first and gating after would freeze the animation for the frames
-       it skips. The clamp is the reverse hazard - a tab that was in the background
-       reports one huge delta, and every dot teleports to the end of its edge. */
+       previous call, so a skipped frame still counts toward the fpsCap
+       accumulator. Sampling first and gating after would stall the cap.
+       The clamp is the reverse hazard - a tab that was in the background reports
+       one huge delta, and the accumulator would spend it as several frames at
+       once. (原来这段还有第二句：脉冲点会瞬移到线的尽头。连线随星型一起撤了，
+       dt 现在只有 _acc 一个消费者；钳位与两条通道本身一个字没改。) */
     const dt = Math.min(0.1, this._clock.getDelta())
-    this._t += dt
     /* fpsCap is a skip, not a slower clock (S4 §1.4): a status wall is not a game,
        and half the frame rate on a GT 1030 is the cheapest headroom in the app. */
     if (this.fpsCap > 0) {
       this._acc += dt
       if (this._acc < 1 / this.fpsCap) return
       this._acc = 0
-    }
-    const t = this._t
-    for (const e of this.edges) {
-      if (!e.pulse) continue
-      const f = (e.speed * t + e.phase) % 1
-      e.pulse.position.lerpVectors(e.from, e.to, f)
-      const s = 0.7 + Math.sin(f * Math.PI) * 0.6   // fade at ends via scale, cheap
-      e.pulse.scale.setScalar(Math.max(0.25, s))
     }
     this.controls?.update()
     this.renderer.render(this.scene, this.camera)
@@ -501,16 +444,13 @@ export class ClusterTopologyRenderer {
     const canvas = this.renderer.domElement
     canvas.removeEventListener('webglcontextlost', this._onCtxLost)
     canvas.removeEventListener('webglcontextrestored', this._onCtxRestored)
-    this._clearEdges()
     if (this._onDown) {
       canvas.removeEventListener('pointerdown', this._onDown)
       canvas.removeEventListener('pointerup', this._onUp)
     }
     // Everything the scene holds except lights and the camera
     for (const rec of this.nodes.values()) this._disposeObject(rec.group)
-    for (const stub of this.stubs.values()) this._disposeObject(stub.group)
     this.nodes.clear()
-    this.stubs.clear()
     this.scene.traverse((o) => {
       if (o.isMesh || o.isLine || o.isPoints) {
         o.geometry?.dispose?.()
@@ -526,11 +466,6 @@ export class ClusterTopologyRenderer {
       if (el.parentElement) el.parentElement.removeChild(el)
     }
   }
-}
-
-function pulseSpeed(rtt) {
-  if (rtt == null) return 0.35
-  return Math.min(1.2, Math.max(0.12, 1.2 / (1 + rtt / 15)))
 }
 
 /* V3 假辉光·案甲 (任务书 §5.1) — 机体亮度 = 负载的一维读数，不是事件。
