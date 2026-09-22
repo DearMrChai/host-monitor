@@ -16,7 +16,8 @@
  * about, and `check-tokens.mjs` could not see it because its pairing table never
  * listed the structural keys. So `STRUCT` below mirrors `:root` key for key and
  * the gate now covers all twelve; `COOLANT` is deliberately *not* paired, because
- * the DOM has no legend swatch for a liquid.
+ * the DOM has no legend swatch for a liquid — same reason `LIGHTING` is not
+ * paired: the DOM has no concept of a lamp (V3 前置 4.0, 任务书 §5.1).
  */
 
 /** The four states, as the scene sees them (matches `--green/--orange/--red`).
@@ -38,6 +39,35 @@ export const GROUND = {
   plate: '#131d28',
   gridMajor: '#1d2a38',
   gridMinor: '#18222d',
+}
+
+/**
+ * Lighting rig — V3 翻暗 前置 4.0 (任务书 §5.1). The three lamps used to live in
+ * `ClusterTopologyRenderer` as un-palettised literals. Only the *intensities*
+ * moved here (ambient 0.75 / key 0.9 / fill 0.35 → 0.20 / 0.70 / 0.25): a white
+ * ambient of 0.75 lifted the whole dark ground toward neutral grey, which is
+ * R-3's "raise everything to get depth" error played through the lighting
+ * channel, and depth now has to come back to the faces themselves.
+ *
+ * The hues are byte-for-byte what the paper-era rig shipped with, **on purpose**.
+ * Whether the ivory key survives on a dark ground is his call, not this cut's
+ * (§5.1 把它明确留给眼睛), and moving colour and intensity in the same step makes
+ * the eye reading unattributable. The whole hue question is now a three-value
+ * edit in this block — `#eef4fa` is the cool-white candidate for `key`.
+ *
+ * Carries `intensity` alongside `color` because the lamp is one fact: a rig that
+ * lives in two files is the same shape H9 and §5.2 keep having to name, and the
+ * tune this cut exists to enable happens here, once, in front of the screen.
+ *
+ * Illumination, not a colour dimension: these never paint an object, they only
+ * shape faces, so R-1's four-state reservation is untouched. Deliberately *not*
+ * in check-tokens' pairing table — the DOM has no concept of a lamp to disagree
+ * with, which is exactly why COOLANT stays unpaired too (任务书 §6.5).
+ */
+export const LIGHTING = {
+  ambient: { color: '#ffffff', intensity: 0.2 },
+  key: { color: '#fff5e0', intensity: 0.7 },
+  fill: { color: '#ddeeff', intensity: 0.25 },
 }
 
 /**
@@ -117,4 +147,4 @@ export function levelColor(level) {
   return hex == null ? null : toRGB(hex)
 }
 
-export default { STATE, GROUND, NEUTRAL, STRUCT, COOLANT, toRGB, levelColor }
+export default { STATE, GROUND, LIGHTING, NEUTRAL, STRUCT, COOLANT, toRGB, levelColor }

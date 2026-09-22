@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js'
-import { STATE, NEUTRAL, GROUND, toRGB } from '../lib/palette.js'
+import { STATE, NEUTRAL, GROUND, LIGHTING, toRGB } from '../lib/palette.js'
 
 /**
  * ClusterTopologyRenderer (P3 / V1.5 star topology)
@@ -177,11 +177,17 @@ export class ClusterTopologyRenderer {
       this.camera.lookAt(0, 1, 0)
     }
 
-    this.scene.add(new THREE.AmbientLight(0xffffff, 0.75))
-    const key = new THREE.DirectionalLight(0xfff5e0, 0.9)
+    /* V3 翻暗 前置 4.0 (任务书 §5.1): the paper-era rig's white ambient of 0.75
+       lifted the whole dark ground toward neutral grey - R-3's depth-by-
+       brightening error, occurring in the lighting channel. The rig now reads
+       from `palette.LIGHTING`, so the one knob this cut leaves open (how dark is
+       too dark, and does the ivory key survive) is one block, in one file,
+       tunable in front of the screen. Values are first guesses: 未验证，交人眼看一次. */
+    this.scene.add(new THREE.AmbientLight(toRGB(LIGHTING.ambient.color), LIGHTING.ambient.intensity))
+    const key = new THREE.DirectionalLight(toRGB(LIGHTING.key.color), LIGHTING.key.intensity)
     key.position.set(8, 18, 10)
     this.scene.add(key)
-    const fill = new THREE.DirectionalLight(0xddeeff, 0.35)
+    const fill = new THREE.DirectionalLight(toRGB(LIGHTING.fill.color), LIGHTING.fill.intensity)
     fill.position.set(-10, 8, -8)
     this.scene.add(fill)
 
