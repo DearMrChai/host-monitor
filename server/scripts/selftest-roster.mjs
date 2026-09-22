@@ -597,15 +597,27 @@ demoFleet.attach(store).setEnabled(true)
 demoFleet.tick()
 const snap1 = store.getSnapshot()
 const props = snap1.hosts.filter((h) => h.kind === 'demo')
-ok('F8 演示机群 4 台，名字一律带 模拟- 前缀',
-  props.length === 4 && props.every((h) => h.display_name.startsWith('模拟-'))
+/* H35 销账（他 09-22 夜裁"名单钉死＋台数派生"）：**台数不再抄字面量**，从夹具
+   `demoFleet.ids()` 拿（真源＝`src/demo.js` 那张 SCENARIO 表）。改守的东西换成**名单**：
+   道具恰好是这五个 id。⇒ 加一台道具＝改夹具一处＋这里名字一处（不是三处）；
+   而"不小心多注册进来一台"仍然当场红——名单会变长，`props.length === ids().length`
+   也会在"该上线的没上线"时红。原来那三条 `=== 4` 的牙一条都没丢。
+   正对照（09-22 夜实测）：往 SCENARIO 插一台 `sim-mutant` ⇒ **只有 F8 红**（名单不认它），
+   F8b／G6 因为台数已派生所以照常绿——这正是"派生"该有的分工：数量自己跟，名单要人签。 */
+const PROPS = ['sim-game', 'sim-media', 'sim-notebook', 'sim-tmpnote', 'sim-vectordb']
+const gotIds = props.map((h) => h.host_id).sort()
+const fixtureIds = demoFleet.ids().sort()
+ok(`F8 道具名单钉死（${PROPS.length} 台，台数从夹具派生），名字一律带 模拟- 前缀`,
+  gotIds.join() === PROPS.join() && props.length === fixtureIds.length
+  && props.every((h) => h.display_name.startsWith('模拟-'))
   && props.every((h) => h.host_id.startsWith('sim-')),
-  props.map((h) => h.display_name).join(','))
+  JSON.stringify({ got: gotIds, fixture: fixtureIds, names: props.map((h) => h.display_name) }))
 ok('F8b 道具不进健康度/在线分母/聚合负载',
   snap1.cluster.total === snap0.cluster.total && snap1.cluster.health === snap0.cluster.health
-  && snap1.cluster.demo.total === 4
+  && snap1.cluster.demo.total === fixtureIds.length
   && snap1.cluster.aggregate.cpu.avg === snap0.cluster.aggregate.cpu.avg,
-  JSON.stringify({ t0: snap0.cluster.total, t1: snap1.cluster.total, agg: snap1.cluster.aggregate.cpu }))
+  JSON.stringify({ t0: snap0.cluster.total, t1: snap1.cluster.total,
+                   demo: snap1.cluster.demo.total, agg: snap1.cluster.aggregate.cpu }))
 {
   /* The card colour is the DEBOUNCED level (P2 contract), so one frame over the
      threshold is legitimately still OK. What must be true immediately is that
@@ -709,9 +721,10 @@ await withServer(async () => {
   // in every other respect, which includes firing their own alerts.
   await new Promise((res) => setTimeout(res, 7_000))
   const sOn = await snapshot()
-  ok('G6 演示开关走服务端+口令：4 台道具上线，卡片数增加',
-    on.status === 200 && sOn.cluster.demo.total === 4
-    && sOn.hosts.length === sBefore.hosts.length + 4)
+  const propCount = demoFleet.ids().length   // 同上：台数派生，不抄字面量（H35）
+  ok(`G6 演示开关走服务端+口令：${propCount} 台道具上线，卡片数增加（台数从夹具派生）`,
+    on.status === 200 && sOn.cluster.demo.total === propCount
+    && sOn.hosts.length === sBefore.hosts.length + propCount)
   ok('G6d 道具的告警照常进面板（防抖后），但真机健康度不因此改变',
     sOn.alerts.active.some((a) => a.host_id === 'sim-media' && a.metric === 'disk')
     && sOn.cluster.health === sBefore.cluster.health,
