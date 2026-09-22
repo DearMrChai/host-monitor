@@ -591,6 +591,88 @@ const READ_PROPS = new Set(READS.map((r) => r.prop))
     + `强候选 ${strong.length} 个 [${strong.map(([k]) => k).join(' / ') || '—'}] 全部在册；在册把手 ${scannedHandles}）`)
 }
 
+/* ==========================================================================
+ * 族四 · 字号与动效时长：登记的债，不是认可的设计
+ * ========================================================================== */
+
+/* 全仓 :root 有 36 个变量，却没有一档字阶。下面这两张表**不是**设计基线，是欠账清单：
+   搬字阶会改画面（em 与 max() 的换算、声明优先级、scoped 覆盖次序），那一圈要用户出场。
+   本包画面零变化 ⇒ 只钉现状、只挡"再多一档"。档数变少了要顺手把基线改小，那才是还账。 */
+const BASELINE_FONT_PX = ['9px', '10px', '11px', '12px', '13px', '14px', '15px', '16px', '18px', '20px', '22px']
+const BASELINE_FONT_OTHER = [
+  '.5em', '.55em', '.72em', '.85em',
+  'max(13px, .9vw)', 'max(13px, .95vw)', 'max(14px, .95vw)', 'max(16px, 1.05vw)',
+  'max(16px, 1.1vw)', 'max(20px, 1.4vw)', 'max(20px, 1.5vw)', 'max(26px, 1.9vw)', 'max(26px, 2vw)',
+]
+const BASELINE_DURATION_WRITTEN = ['0.6s', '1.2s', '1.6s', '1s', '18s', '25s', '2s', '6s']
+/* 上面那 8 档里有 4 档是**记法**造成的：`6s` 是 `.6s`、`25s` 是 `.25s`、`18s` 是 `.18s`、
+   `2s` 是 `.2s`——归一之后真实时长只有 7 种。不写这一格，下一个数这债的人会把
+   `.6s` 与 `0.6s` 当成两档，虚报一档。 */
+const BASELINE_DURATION_REAL = ['0.18s', '0.2s', '0.25s', '0.6s', '1.2s', '1.6s', '1s']
+
+/**
+ * 字号：一条 `font-size:` 声明按它的**值**归类，不是在正则里分岔。
+ * 为什么——`font-size\s*:\s*(?![0-9.]+px)(...)` 这种"在正则里排除 px"的写法会被
+ * `\s*` 的回溯绕过去（` 11px` 从空格处试一次，负向前看就成立了），结果 px 档同时
+ * 出现在另一本账里。第一版就在这里翻过车，所以改成：先把值整段取出来、去掉
+ * `!important`、trim，再用一个判据分类。
+ */
+function collectFont() {
+  const px = new Map()
+  const other = new Map()
+  const bump = (m, k) => m.set(k, (m.get(k) || 0) + 1)
+  for (const f of FILES) {
+    for (const m of f.stripped.matchAll(/\bfont-size\s*:\s*([^;{}\n]+)/g)) {
+      const v = m[1].replace(/\s*!\s*important\s*$/i, '').trim()
+      if (!v) continue
+      if (/^[0-9.]+px$/.test(v)) bump(px, v)
+      else bump(other, v)
+    }
+  }
+  return { px, other }
+}
+const { px: FONT_PX, other: FONT_OTHER } = collectFont()
+
+/**
+ * 动效时长：一次扫描同时出两本账。
+ * `(\.?)` 那半是为了留住**前导点**：`.6s` 被 `\b` 切成 `6s`，与 `0.6s` 在派单口径下
+ * 是两档、在物理上是同一档。记法档照派单钉（族四的读数），真实档另钉一档，两本都对得上
+ * 才算"数清楚了"，也只有 14 处。
+ */
+function collectDurations() {
+  const written = new Map()
+  const real = new Map()
+  const bump = (m, k) => m.set(k, (m.get(k) || 0) + 1)
+  for (const f of FILES) {
+    for (const m of f.stripped.matchAll(/\b(?:animation|transition)(?:-[a-z]+)?\s*:\s*([^;{}]+)/g)) {
+      for (const d of m[1].matchAll(/(\.?)(\b[0-9]+(?:\.[0-9]+)?)s\b/g)) {
+        bump(written, `${d[2]}s`)
+        bump(real, `${Number(`${d[1]}${d[2]}`)}s`)
+      }
+    }
+  }
+  return { written, real }
+}
+const { written: DUR_WRITTEN, real: DUR_REAL } = collectDurations()
+
+/** "只许减不许增"的公共判据：出现新值即红，旧值消失则提示把基线改小。 */
+function debtGate(name, seen, baseline, unit, extra = '') {
+  const b = new Set(baseline)
+  const grown = [...seen.keys()].filter((k) => !b.has(k)).sort()
+  const retired = baseline.filter((k) => !seen.has(k)).sort()
+  const dist = [...seen].sort((x, y) => y[1] - x[1]).map(([k, v]) => `${k}×${v}`).join(' ')
+  if (!seen.size) bad(name, `读到 0 个 ${unit} ⇒ 尺子瞎了（正对照失败），这条读数不算`)
+  else if (grown.length) bad(name, `出现新的${unit}：${grown.join(' / ')}。这一族的档数只许减不许增——加一档要先过用户，`
+    + `因为搬 token 会改画面\n      现状：${dist}`)
+  else ok(name, `（${seen.size} 档 / 基线 ${baseline.length} 档${retired.length ? `，已少 ${retired.length} 档：${retired.join('/')} ⇒ 把基线改小` : ''}）${extra}\n      分布：${dist}`)
+}
+
+debtGate('皮11 字号 px 档集合不许多（登记的债，不是认可的设计）', FONT_PX, BASELINE_FONT_PX, '字号档',
+  '。⚠️这条不覆盖 max()/em 写法，由 皮12 另立一本账')
+debtGate('皮12 非 px 的 font-size 写法不许多（皮11 的盲区，两边都钉才挡得住"换写法加档"）', FONT_OTHER, BASELINE_FONT_OTHER, '写法')
+debtGate('皮13 动效时长记法档集合不许多（animation*/transition* 声明里的 s 值）', DUR_WRITTEN, BASELINE_DURATION_WRITTEN, '时长记法档')
+debtGate('皮14 动效时长归一后不许多（.6s 与 0.6s 是一档，别让记法虚报债）', DUR_REAL, BASELINE_DURATION_REAL, '真实时长档')
+
 console.log(`\n[selftest-skin] pass=${pass} fail=${failures.length}`)
 process.exit(failures.length ? 1 : 0)
 
