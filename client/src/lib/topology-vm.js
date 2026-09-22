@@ -25,6 +25,12 @@ export function topologyViewModel(hosts, opts = {}) {
     linkLevel: h.status?.components?.link?.level || null,
     online: !!h.online,
     absent: isAbsent(h),
+    /* V3 包 4 · 人声明的形态档（他 09-22 深夜裁"接这一行"）。它必须跟 `load` 一样
+       **随记录走**而不是在渲染器里现取：这一份是 hosts[] → 场景的唯一映射，桌面 A0 与
+       ?kiosk 两面屏都从它取记录，白名单漏一个字段就等于那条屏上没人声明过形态——
+       `silhouetteTierOf` 读不到声明会静默落回按机名猜，墙上看不出任何异常（H34 同形）。
+       null 是"没人说过"，不是"第四档"。 */
+    form_factor: h.form_factor ?? null,
     /* V3 假辉光·案甲 (任务书 §5.1): the scene's one brightness channel reads this
        number, so it travels with the record instead of being recomputed downstream
        - `loadOf` is the repo's only 负载 口径 and a second max() in a renderer is

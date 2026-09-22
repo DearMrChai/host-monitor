@@ -882,14 +882,13 @@ const PLATE_RULES = STYLE_PLATE.concat(KIOSK_PLATE)
   else ok(`A1 与牌面侧 0 处第二判法（正对照：形态关键词只存在于 lib/silhouette.js 的那张回落表里）`)
 }
 
-/* ⑧ 只登记、不裁决：声明到得了 A0 吗？
-   silhouetteTierOf 读的是 topologyViewModel 造出来的那条记录，而这条记录目前是
-   一个**字段白名单**（id/name/deviceLevel/linkLevel/online/absent/load/links）。
-   服务端那一列已经过 store.js 的档案族挂到每个 host 上了（步 1 的 H5 钉着），
-   但白名单里没有它 ⇒ **今天墙上的档名仍然全部由猜测决定**。
-   与 H34"看着像旋钮、其实没接线"同形，所以把读数打印出来而不是悄悄过去；
-   要不要补那一行属派单授权范围之外（§5.5【授权收窄】只给了 roster.js 与 store.js
-   两处），交他裁。这条**不是断言**，红绿都不影响本套条数。 */
+/* ⑧ 声明到得了 A0 吗？—— 从"登记"升成"判据"（他 09-22 深夜裁"接这一行"）
+   silhouetteTierOf 读的是 topologyViewModel 造出来的那条记录，而这条记录是一个
+   **字段白名单**。服务端那一列经 store.js 的档案族挂到每个 host 上（步 1 的 H5 钉着），
+   再经这一行进白名单，档名才第一次由**他的声明**决定而不是由机名猜。
+   为什么这一条必须钉死而不是"看一眼就好"：白名单少一个字段时**什么都不会坏**——
+   渲染器拿到 undefined 就落回猜测表，墙上照样有形状、照样没有报错，只有"你声明过"
+   这件事无声消失了。这与 H34"看着像旋钮、其实没接线"同形。 */
 {
   const VM = readSrc('lib/topology-vm.js')
   /* `[^
@@ -898,9 +897,11 @@ const PLATE_RULES = STYLE_PLATE.concat(KIOSK_PLATE)
      的 0 就不能算读数（R-6 当场自证了一次）。 */
   const fwd = (name) => [...VM.matchAll(new RegExp(`^\\s*${name}:\\s*[^\\n]*\\bh\\.${name}(?![\\w])`, 'gm'))].length
   const ctrl = fwd('online')
-  console.log(`\n[包 4 登记·非判据] topology-vm.js 对 form_factor 的转发 = ${fwd('form_factor')} 处`
-    + `（正对照：同一条扫描读到同族的 online 转发 ${ctrl} 处${ctrl ? '＝尺子看得见这个白名单' : '＝⚠️ 尺子瞎了，左边那个数不算读数'}）。`
-    + `\n                  ⇒ 0 处意味着：服务端声明现在到不了 A0，档名仍全靠猜。补那一行不在本包授权内，交他裁。`)
+  const got = fwd('form_factor')
+  if (!ctrl) bad('白名单转发扫描缺正对照', `同一条扫描读不到同族的 online 转发 ⇒ "form_factor ${got} 处"不算读数，尺子瞎了`)
+  else if (got !== 1) bad('声明接不进 A0：topology-vm 白名单少了这一行', `读到 ${got} 处（应为 1）。正对照 online=${ctrl} 处，所以这不是扫描器的问题——墙上档名会退回按机名猜`)
+  else ok(`声明走完了整条链路：roster 列 → store 转发（H5）→ topology-vm 白名单 1 处（正对照：同一条扫描读到同族 online 转发 ${ctrl} 处）`
+    + ` ⇒ 两屏（桌面 A0 与 ?kiosk）共用这一份映射，一处接线两屏同时生效`)
 }
 
 /* ==========================================================================
