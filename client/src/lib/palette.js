@@ -63,11 +63,21 @@ export const GROUND = {
  * shape faces, so R-1's four-state reservation is untouched. Deliberately *not*
  * in check-tokens' pairing table — the DOM has no concept of a lamp to disagree
  * with, which is exactly why COOLANT stays unpaired too (任务书 §6.5).
+ *
+ * Second pass on level, not on shape (his first reading: 有点太暗): the rig went up
+ * on the **lit faces only** — ambient 0.20→0.30, key 0.70→1.05, fill 0.25→0.35.
+ * Incident sums, not rendered luminance (the directional term still rides NdotL):
+ * a face square to the key takes 1.35 against 0.65 on the shadow side, i.e. the
+ * ~2:1 depth ratio of the previous pass is kept while everything reads a stop and
+ * a half brighter. That ratio is the whole point — the paper-era rig's 1.65 total
+ * came with a 1.5:1 ratio, so it was never too bright, it was **flat**, and
+ * buying brightness back with ambient is how the grey fog came back. How much of
+ * the headroom is right is his call at 收口, and it is now one number per lamp.
  */
 export const LIGHTING = {
-  ambient: { color: '#ffffff', intensity: 0.2 },
-  key: { color: '#fff5e0', intensity: 0.7 },
-  fill: { color: '#ddeeff', intensity: 0.25 },
+  ambient: { color: '#ffffff', intensity: 0.3 },
+  key: { color: '#fff5e0', intensity: 1.05 },
+  fill: { color: '#ddeeff', intensity: 0.35 },
 }
 
 /**
