@@ -772,6 +772,111 @@ await withServer(async () => {
   again.close()
 }, { ...CHILD_ENV, HM_INGEST_TOKEN: 'legacy' })
 
+/* ================= V3 包 4 · 步 1：nodes.form_factor =================
+   派单 §5.5 步 1 要的两条读数，外加一条把 store.js 那一行转发钉住的扫描。
+
+   ⚠️ 这一节**只追加**，上面 A-G 的断言一条没动（色表纪律 R-6 与 §6"永不重写"
+   第 2 条：自检不许为了让新版通过而被改）。
+
+   为什么 H3/H4 是这一节的核心而不是配饰：H1 走的是 `CREATE TABLE` 那条**新库**
+   路径，而生产那台机器早就有 roster.db —— 只验 H1 等于没验（派单原话）。所以
+   H3 先手造一个**没有这一列**的库，并且**先证实它真的没有**（这就是喂给扫描器
+   的那条"已知应该命中"的正对照：如果连 BEFORE 都读不到 15 列无 form_factor，
+   后面那个"迁移后有了"就什么都不是），再跑真的启动迁移，再读一次。 */
+{
+  const cols = (db) => db.prepare('PRAGMA table_info(nodes)').all().map((c) => c.name)
+  const mainCols = cols(roster.db)
+  ok('H1 新库路径：nodes.form_factor 恰有一列、在末位、可空（无 NOT NULL／无 DEFAULT／无 CHECK）',
+    mainCols.filter((c) => c === 'form_factor').length === 1
+    && mainCols[mainCols.length - 1] === 'form_factor',
+    mainCols.slice(-2).join(','))
+
+  // 读写路径（沿用 setProfile 那一族的写法）：内存 cache 与磁盘各读一次，
+  // 只有 cache 对不算数 —— save() 走的是全列 UPDATE，漏一个占位符就是静默写空。
+  roster.ensure('form-1', { hostname: 'FormOne' })
+  ok('H2 无声明即 NULL：新到的机器没有人声明过形态，读回来是 null 不是空串',
+    roster.get('form-1').form_factor === null
+    && roster.db.prepare('SELECT form_factor v FROM nodes WHERE host_id=?').get('form-1').v === null)
+  const pf = roster.setProfile('form-1', { form_factor: 'RACK ' })
+  ok('H2b setProfile 能写、能读回，且规范化为小写（cache 与磁盘同值）',
+    pf.ok && pf.changed.includes('form_factor')
+    && roster.get('form-1').form_factor === 'rack'
+    && roster.db.prepare('SELECT form_factor v FROM nodes WHERE host_id=?').get('form-1').v === 'rack',
+    JSON.stringify({ changed: pf.changed, got: roster.get('form-1').form_factor }))
+  const pfClear = roster.setProfile('form-1', { form_factor: '' })
+  ok('H2c 撤销声明回到 NULL（空串不是"第四档"，是"没人说过"）',
+    pfClear.changed.includes('form_factor') && roster.get('form-1').form_factor === null)
+
+  /* ---- 正对照本体：旧库 + 真的启动迁移 ---- */
+  const LEGACY = path.join(DIR, 'legacy-roster.db')
+  {
+    const old = new DatabaseSync(LEGACY)
+    // 包 4 之前的 nodes 形状，逐列照抄（15 列、无 form_factor）。
+    // 手搓一个"少一列"的表不是省事：这一句就是那个已知应该命中的样本。
+    old.exec(`CREATE TABLE nodes (
+      host_id TEXT PRIMARY KEY, display_name TEXT NOT NULL, hostname TEXT, role TEXT,
+      owner TEXT NOT NULL DEFAULT 'me', site TEXT NOT NULL DEFAULT 'home',
+      kind TEXT NOT NULL DEFAULT 'agent', presence_class TEXT NOT NULL DEFAULT 'persistent',
+      confirmed INTEGER NOT NULL DEFAULT 0, enrolled_at INTEGER, last_seen INTEGER,
+      agent_version TEXT, enroll_token TEXT, fingerprint TEXT,
+      settings_json TEXT NOT NULL DEFAULT '{}');`)
+    old.prepare('INSERT INTO nodes (host_id, display_name, hostname) VALUES (?,?,?)')
+      .run('legacy-box', 'LegacyBox', 'legacy-box')
+    old.close()
+  }
+  const rawLegacy = new DatabaseSync(LEGACY)
+  const beforeCols = cols(rawLegacy)
+  rawLegacy.close()
+  ok('H3 正对照（BEFORE 半边）：造出来的"旧库"确实没有 form_factor 列——这条不成立就没有必要跑迁移',
+    !beforeCols.includes('form_factor') && beforeCols.length === 15,
+    beforeCols.length + ' 列')
+
+  const prevEnv = process.env.HM_ROSTER_DB
+  process.env.HM_ROSTER_DB = LEGACY
+  // `?hm-pkg4=` 是一次 cache-busting：roster.js 是模块级单例，同一个说明符拿不到
+  // 第二个实例。这里要的是"构造函数真的跑了一遍"，不是把方法抠出来手调。
+  const { roster: migrated } = await import('../src/roster.js?hm-pkg4=legacy')
+  const afterCols = cols(migrated.db)
+  ok('H3 旧库经启动迁移真的加上了这一列（BEFORE 无 → AFTER 有，且落在末位）',
+    afterCols.filter((c) => c === 'form_factor').length === 1
+    && afterCols[afterCols.length - 1] === 'form_factor',
+    `${beforeCols.length} → ${afterCols.length} 列`)
+  ok('H3b 迁移不动已有行：旧库里那台机子的原有字段一个没丢，新列读作 NULL',
+    migrated.get('legacy-box')?.display_name === 'LegacyBox'
+    && migrated.get('legacy-box')?.hostname === 'legacy-box'
+    && migrated.get('legacy-box')?.form_factor === null)
+
+  /* 第二次启动才是幂等这条判据的对象（SQLite 没有 ADD COLUMN IF NOT EXISTS，
+     所以判据不是"它报了什么"，而是"它**没**报什么"）：再开一个实例，列数不变、
+     不抛 duplicate column、上一次写进去的声明还在。 */
+  migrated.setProfile('legacy-box', { form_factor: 'laptop' })
+  migrated.db.close()
+  const { roster: second } = await import('../src/roster.js?hm-pkg4=second-boot')
+  const againCols = cols(second.db)
+  ok('H4 幂等：第二次启动不再 ALTER（列数不变），且第一次写的声明活了下来',
+    againCols.length === afterCols.length
+    && againCols.filter((c) => c === 'form_factor').length === 1
+    && second.get('legacy-box').form_factor === 'laptop',
+    `${afterCols.length} → ${againCols.length} 列`)
+  second.db.close()
+  process.env.HM_ROSTER_DB = prevEnv
+
+  /* store.js 那一行档案转发（派单授权的第二处、也是最后一处）。这一条扫的是
+     "这一列有没有被快照路径读走" —— 与 H34 同形的那个坑（列存在 ≠ 有人在读）。
+     正对照是同一条正则从同一族里读到 owner／site：读不到就说明尺子瞎了，
+     那个"form_factor 命中 1 处"不算读数。 */
+  const { readFileSync } = await import('fs')
+  const STORE = readFileSync(path.join(HERE, '..', 'src', 'store.js'), 'utf8')
+  /* `(?![\w])` 两头都要钉：变异实验实测过一条不钉右界的版本 —— 把生产侧改成
+     `node.form_factor_muted_by_mutation` 时 H5 照常绿，因为它匹配的是前缀。
+     那是一次"断言没牙"的实测，不是推演。 */
+  const fwd = (name) => [...STORE.matchAll(
+    new RegExp(`host\\.${name}(?![\\w]) = node\\.${name}(?![\\w])`, 'g'))].length
+  ok('H5 快照转发：store.js 把 form_factor 挂到每个 host 上（正对照：同一条扫描读到 owner／site）',
+    fwd('form_factor') === 1 && fwd('owner') === 1 && fwd('site') === 1,
+    `form_factor=${fwd('form_factor')} owner=${fwd('owner')} site=${fwd('site')}`)
+}
+
 history.db?.close?.()
 metaDb.close()
 roster.db?.close?.()   // sections A-D use an in-process Roster on the same file

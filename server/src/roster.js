@@ -126,7 +126,11 @@ class Roster {
         agent_version  TEXT,
         enroll_token   TEXT,
         fingerprint    TEXT,
-        settings_json  TEXT NOT NULL DEFAULT '{}'
+        settings_json  TEXT NOT NULL DEFAULT '{}',
+        /* V3 包 4 · 人声明的形态档（任务书 §5.5 步 1）。可空、无默认、不加 CHECK。
+           故意放在**最后一列**：旧库走 #migrateFormFactorColumn() 的 ALTER TABLE，
+           ALTER 只能往末尾追加——新库若把这列写在中间，两条路径的表形状就不一样了。 */
+        form_factor    TEXT
       );
       CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS enroll_codes (
@@ -165,6 +169,10 @@ class Roster {
       );
     `)
 
+    /* 必须在 prepare/reload 之前：CREATE TABLE IF NOT EXISTS 对**已存在的库不加列**，
+       而生产那台早就有 roster.db。列不在 cache 行里，save() 就会把它写空。 */
+    this.#migrateFormFactorColumn()
+
     this.insert = this.db.prepare(`
       INSERT INTO nodes (host_id, display_name, hostname, role, owner, site, kind,
         presence_class, confirmed, enrolled_at, last_seen, agent_version, enroll_token,
@@ -173,7 +181,7 @@ class Roster {
     this.update = this.db.prepare(`
       UPDATE nodes SET display_name=?, hostname=?, role=?, owner=?, site=?, kind=?,
         presence_class=?, confirmed=?, last_seen=?, agent_version=?, enroll_token=?,
-        fingerprint=?, settings_json=?
+        fingerprint=?, settings_json=?, form_factor=?
       WHERE host_id=?`)
 
     // Full in-memory copy: the 2s broadcast path reads this, never SQL.
@@ -194,6 +202,25 @@ class Roster {
     for (const row of this.db.prepare('SELECT * FROM nodes').all()) {
       this.cache.set(row.host_id, row)
     }
+  }
+
+  /** V3 包 4 · 幂等启动迁移（任务书 §5.5 步 1 的第一条判据）。
+   *
+   *  为什么必须存在而不是只改上面那段 CREATE TABLE：`CREATE TABLE IF NOT EXISTS`
+   *  对**已经存在**的表整条语句都是空操作——它不会加列。生产那台机器上 roster.db
+   *  早就有了，所以只验"新库路径"等于没验（旧库永远拿不到这一列，而墙上没人报错，
+   *  只是形态声明无声失效——与 H34"看着像旋钮其实没接线"同形）。
+   *
+   *  判据用 PRAGMA table_info 而不是"ALTER 了看它抛不抛"：SQLite 没有
+   *  `ADD COLUMN IF NOT EXISTS`，靠异常当流程会让第二次启动的日志里出现一条
+   *  duplicate column 的红字，而这条迁移的判据恰恰是"第二次不该有任何事发生"。
+   *  幂等因此是可重跑的，不是一次性的。 */
+  #migrateFormFactorColumn() {
+    const cols = this.db.prepare('PRAGMA table_info(nodes)').all()
+    if (cols.some((c) => c.name === 'form_factor')) return false
+    this.db.exec('ALTER TABLE nodes ADD COLUMN form_factor TEXT')
+    console.log('[Roster] Legacy DB upgraded: nodes.form_factor added (nullable, no default, no CHECK)')
+    return true
   }
 
   /** S5 §2: pre-S5 builds wrote the node key in plaintext. The plaintext is in
@@ -302,6 +329,9 @@ class Roster {
       enroll_token: info.node_key ? hashNodeKey(info.node_key) : null,
       fingerprint: info.fingerprint || null,
       settings_json: '{}',
+      // 到达 = 没人声明过它的形态。INSERT 故意不带这一列（列在末尾、可空、无默认），
+      // 但内存行必须有这个键：save() 走的是全列 UPDATE，缺键就等于把声明写空。
+      form_factor: null,
     }
     this.insert.run(node.host_id, node.display_name, node.hostname, node.role, node.owner,
       node.site, node.kind, node.presence_class, node.confirmed, node.enrolled_at,
@@ -321,7 +351,8 @@ class Roster {
   save(node) {
     this.update.run(node.display_name, node.hostname, node.role, node.owner, node.site,
       node.kind, node.presence_class, node.confirmed, node.last_seen, node.agent_version,
-      node.enroll_token, node.fingerprint, node.settings_json, node.host_id)
+      node.enroll_token, node.fingerprint, node.settings_json, node.form_factor ?? null,
+      node.host_id)
     this.cache.set(node.host_id, node)
     return node
   }
@@ -542,6 +573,16 @@ class Roster {
         return { ok: false, error: '站点名需为小写字母/数字/-/_（它同时是探测计划表的键）' }
       }
       if (clean !== node.site) { next.site = clean; changed.push('site') }
+    }
+    /* V3 包 4 · 形态声明（任务书 §5.5 步 1）。三档是**显示属性**不是事实陈述
+       （他 09-21 裁的），所以这里只规范化、**不加 CHECK、不校验枚举**——校验它
+       就等于把"第四档"变成一次服务端拒绝，而 §5【明确不做】把这类通用化挡在外面。
+       不认识的值由客户端 silhouetteTierOf 落回猜测路径，这一层不替它决定。
+       空串 / null / 'null' 一律写成 NULL = 撤销声明，回到"没人说过"。 */
+    if (patch.form_factor !== undefined) {
+      const raw = patch.form_factor === null ? '' : String(patch.form_factor).trim().toLowerCase()
+      const clean = !raw || raw === 'null' ? null : raw.slice(0, 20)
+      if (clean !== (node.form_factor ?? null)) { next.form_factor = clean; changed.push('form_factor') }
     }
     if (!changed.length) return { ok: true, node, changed: [] }
     const saved = this.save(next)

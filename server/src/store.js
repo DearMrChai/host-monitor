@@ -175,6 +175,9 @@ class MonitorStore {
         host.presence_class = node.presence_class;
         host.owner = node.owner;
         host.site = node.site;
+        // V3 包 4 (任务书 §5.5 步 1 授权的第二处、也是最后一处)：人声明的形态档，
+        // 与 owner/site 完全同类 —— 都是 roster 里可读可写的档案字段，可空。
+        host.form_factor = node.form_factor ?? null;
         host.kind = node.kind;
         host.confirmed = !!node.confirmed;
         host.agent_version = node.agent_version;
