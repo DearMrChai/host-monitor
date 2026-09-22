@@ -13,13 +13,14 @@
  * `4f7961c` 补上了那一行，并留下一条只盯 `form_factor` 这**一个字段**的断言。
  * 本包把"这一个字段有闸"升成"这道门有闸"：下一个新增显示字段不能再靠运气被发现。
  *
- * 四族判据
+ * 五族判据
  * ------
  *   族零 仪器自校准（剥注释这件事不许吞掉真声明）
  *   族一 DOM 侧已经收口，钉的是它别退化（style.css 家外恰 0 支）
  *   族二 两家之外的色值预算（≤ 基线，只许降不许升，逐文件明细）
  *   族三 那道门：皮读到的字段 ⊆ topologyViewModel 返回值的键集合
  *   族四 字号与动效时长的现状登记
+ *   族五 台账 H36 那两个读数（MonitorScene 0 引用 / 14 支色值）在案，只登记不删文件
  *
  * ⚠️ 族四的性质要说清楚：**它不是"这样设计挺好"，是"欠着这么多，先数清楚"**。
  *    全仓 `:root` 有 36 个变量却没有一个字阶档，11 档字号与 8 档时长记法各写各的。
@@ -406,6 +407,10 @@ function splitArgs(s) {
  */
 function followRecords(entry) {
   const f = FILES.find((x) => x.rel === entry.file)
+  /* 入口文件不在了（改名/搬走）以前是直接抛 TypeError 崩在自检里 —— 变异实验 M-G 就是这么
+     撞出来的：结果正确（非零退出）但形态难看，读数的人看见的是栈而不是"入口文件不见了"。
+     现在返回一个显式的空推导，让 皮8 的"读到 0 处 ⇒ 尺子瞎了"和 皮10 的入口签名去点名它。 */
+  if (!f) return { scopes: [], records: [], arrays: [], imports: new Map(), missing: entry.file }
   const text = f.stripped
   const imports = new Map()
   for (const m of text.matchAll(/import\s*\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]/g)) {
@@ -673,6 +678,39 @@ debtGate('皮12 非 px 的 font-size 写法不许多（皮11 的盲区，两边�
 debtGate('皮13 动效时长记法档集合不许多（animation*/transition* 声明里的 s 值）', DUR_WRITTEN, BASELINE_DURATION_WRITTEN, '时长记法档')
 debtGate('皮14 动效时长归一后不许多（.6s 与 0.6s 是一档，别让记法虚报债）', DUR_REAL, BASELINE_DURATION_REAL, '真实时长档')
 
+/* ==========================================================================
+ * 族五 · H36 的两个读数在案（只登记，不删文件）
+ * ========================================================================== */
+
+{
+  /* 台账 H36 记的是两个数：0 引用、带 14 支色值。这两个数今天靠手工 grep，
+     明天就会烂——所以把它们变成断言。**注意方向**：这条不是在禁止把 MonitorScene 接回去，
+     接回去是合法动作；它禁止的是"接回去了而台账还说 0 引用"。红了就去销账，别改判据。 */
+  const DEAD = 'three/MonitorScene.js'
+  const CONTROL = 'three/ClusterTopologyRenderer.js'
+  const refCount = (baseName) => {
+    let n = 0
+    const sites = []
+    for (const f of FILES) {
+      if (f.rel === baseName) continue
+      const sym = baseName.split('/').pop().replace(/\.js$/, '')
+      for (const m of f.stripped.matchAll(new RegExp(`import\\s*(?:\\{[^}]*\\b${sym}\\b[^}]*\\}|\\b${sym}\\b)\\s*from|new\\s+${sym}\\s*\\(`, 'g'))) {
+        n += 1
+        sites.push(`${f.rel}:${f.stripped.slice(0, m.index).split('\n').length}`)
+      }
+    }
+    return { n, sites }
+  }
+  const dead = refCount(DEAD)
+  const ctrl = refCount(CONTROL)
+  const colors = (FILES.find((f) => f.rel === DEAD)?.stripped.match(COLOR_STRICT) || []).length
+  const name = '皮15 台账 H36 的两个读数仍成立：MonitorScene 在 client/src 内 0 引用（正对照同尺读到引用）＋ 身带 14 支色值'
+  if (!ctrl.n) bad(name, `正对照失败：同一条尺子在 ${CONTROL} 上读到 0 处引用 ⇒ "MonitorScene 0 引用"不算读数`)
+  else if (dead.n) bad(name, `MonitorScene 现在有 ${dead.n} 处引用（${dead.sites.join(' ')}）⇒ 它不再是死码，去把台账 H36 销掉，`
+    + `本条基线随之重写——这是提醒你更新账，不是不让你接`)
+  else if (colors !== 14) bad(name, `引用数 0 对上了，色值却读到 ${colors} 支（台账写 14）⇒ 台账与代码已经不一致，两个数一起订正`)
+  else ok(name, `（正对照：${CONTROL} 被引 ${ctrl.n} 处 @ ${ctrl.sites.join(' ')}；${DEAD} 排除自身 = 0 处、色值 ${colors} 支）`)
+}
+
 console.log(`\n[selftest-skin] pass=${pass} fail=${failures.length}`)
 process.exit(failures.length ? 1 : 0)
-
