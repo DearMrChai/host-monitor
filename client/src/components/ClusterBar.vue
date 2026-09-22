@@ -131,7 +131,7 @@ const bars = computed(() => {
 .cb-left { display: flex; align-items: center; gap: 10px; }
 .cb-title { font-size: 14px; font-weight: 600; }
 .conn-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--red); }
-.conn-dot.ok { background: var(--green); animation: pulse 2s infinite; }
+.conn-dot.ok { background: var(--green); } /* 同 style.css：常亮＝连接正常，不再占用告警通道 */
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
 
 .health-pill {

@@ -99,7 +99,9 @@ html, body, #app {
   width: 8px; height: 8px; border-radius: 50%;
   background: var(--red);
 }
-.conn-dot.ok { background: var(--green); animation: pulse 2s infinite; }
+/* 常亮＝"连接正常"。原先它 2s 一闪，而闪是告警通道（色表 R-4）；用户 09-22 裁定改常亮。
+   注意 .conn-dot 有两个家：这一支管 DetailView 顶栏，ClusterBar 那颗在它自己的 scoped 块里。 */
+.conn-dot.ok { background: var(--green); }
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
 
 /* 顶栏状态徽章：底色/描边都是状态色的半透明档，此前抄的是三支**从未进过色表**的
