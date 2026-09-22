@@ -1,5 +1,21 @@
 /**
- * silhouette.js — the three shape tiers of the 陈列架 (V3 包 1, 任务书 B §1.2)
+ * silhouette.js — 陈列架的**形状轴**与**排布轴** (V3 包 1 / 包 2 步 1)
+ *
+ * Two of the three axes of A0 live in this file, and they are two *pure*
+ * functions rather than two paragraphs of intent:
+ *
+ *   形状轴  buildTierGeometry(tierKey) -> { body, base }   "某台机器怎么画"
+ *   排布轴  shelfLayout(count, widthPx) -> [{ x, y }]      "每排几格、折几排、格子落在哪"
+ *   牌面轴  lib/plate.js                                   "这一格写什么字、字怎么排"
+ *
+ * That split is the acceptance condition, not a preference: the owner of this
+ * code is a front-end developer who wants to keep iterating one axis at a time
+ * ("想优化某个容器布局，我可以单独按模块和组件去加强"). So each axis has exactly
+ * one function to edit, and each is projected by `selftest-silhouette.mjs`
+ * without a browser. Deliberately **not** here: a plugin registry, a per-host
+ * config, any abstraction for machines beyond these three tiers — 任务书 B §5 的
+ * "明确不做"里"通用化抽象（不为我们这 3 台之外写配置项）"这一条没有被推翻，
+ * "能单独改"不等于"能配置"。
  *
  * Why this lives in `lib/` next to `palette.js` rather than inside the renderer:
  * the numbers below are the thing two things have to agree about — the WebGL
@@ -21,13 +37,23 @@
  *      selftest keeps a normalising helper precisely to prove that failure.
  *   2. **站姿 + 高宽比 + 大小 是档间唯一区别** (§7.2 核心规则). No ears, no grille,
  *      no row of front LEDs, no logo — 挂耳/格栅/灯点/logo 一律不当识别特征, because
- *      at 60px they blur into mush. So a tier is *one box*, and the only
- *      per-tier information is its proportions.
+ *      at 60px they blur into mush. So a tier is *one box* today, and the only
+ *      per-tier information is its proportions. Where a box is built is a
+ *      separate question from what it looks like: the drawing happens in
+ *      `buildTierGeometry` below, so a future part-free refinement of one tier
+ *      (扁平盒 + 一条散热脊) never reaches into the renderer.
  *
  * 高:宽:深 follows §7.2 literally. `unit` (absolute size) is mine — the table
  * gives proportions, not centimetres — so it is listed in the delivery's
  * "我猜的" and is one number per tier to change.
  */
+
+/* three is imported here because 形状轴 has to hand back *geometries*, not
+   numbers the renderer has to interpret. Node imports three cleanly (it is a
+   pure ESM module with no DOM touch at import time), which is what lets
+   `selftest-silhouette.mjs` measure the real bounding boxes below instead of
+   re-deriving them from the same table they came from. */
+import * as THREE from 'three'
 
 export const SILHOUETTE_TIERS = {
   /** §7.2 笔记本 · 卧式薄板 1:16:11 — the thin slab. */
@@ -141,4 +167,76 @@ export function shelfGrid(count, containerWidthPx) {
   return { cols, rows: Math.max(1, Math.ceil(count / cols)) }
 }
 
-export default { SILHOUETTE_TIERS, SILHOUETTE_DEFAULT, silhouetteTierOf, silhouetteSize, SHELF, shelfGrid }
+/**
+ * 排布轴 (V3 包 2 步 1) — where each 格 sits, in world units.
+ *
+ * One pure function owns 每排几格 / 折几排 / 槽距 / 排距: change any of those four
+ * rules and this is the only body that changes, because the renderer stopped
+ * doing coordinate arithmetic the same day this landed (it consumes seats, in
+ * order). `shelfGrid` still decides *how many* columns, so the fold threshold
+ * keeps one home and this function keeps the mapping from a grid to a position.
+ *
+ * Seat i is the i-th host: the caller pre-sorts (see `topology-vm.js`), so seat
+ * order is 脚标轴 and is deterministic. Rows fold **upward** in world Y because
+ * the 陈列架 camera sits slightly above the shelf (SHELF.tiltRatio) — a second
+ * row is the row behind it, drawn one plinth higher, which is why 排距 has to
+ * clear the lower row's label plate (asserted in the selftest).
+ *
+ * @param {number} count how many hosts are on the shelf
+ * @param {number} containerWidthPx width of the viewport in CSS px
+ * @returns {Array<{x:number,y:number}>} one seat per host, in seat order
+ */
+export function shelfLayout(count, containerWidthPx) {
+  const n = Math.max(0, Math.floor(Number(count) || 0))
+  const { cols } = shelfGrid(n, containerWidthPx)
+  const seats = []
+  for (let i = 0; i < n; i += 1) {
+    seats.push({
+      // 列位表以 0 为中心对称排开（机架档宽 2.56、槽距 3.4，整张网格左右留白相等），
+      // 但**行不各自居中**：第 i 席永远站在第 i%cols 列上，所以末排不满时是靠左 packed，
+      // 上下排同列同 x、机体对齐成列。改成逐排居中会让第二排往中间吸，货架读起来就散了。
+      x: ((i % cols) - (cols - 1) / 2) * SHELF.slotPitchWorld,
+      y: SHELF.baseY + Math.floor(i / cols) * SHELF.rowPitchWorld,
+    })
+  }
+  return seats
+}
+
+/**
+ * 形状轴 (V3 包 2 步 1) — how one tier's machine is drawn.
+ *
+ * The renderer asks for two geometries and never builds one itself, so
+ * "把某一档换成别的形状" is an edit inside this function only. Contract both sides
+ * rely on (widen it here and nowhere else, or the seat math starts lying):
+ *
+ *   - `body`  机体: 底面 on local y = 0, centred in x/z, bounding box exactly
+ *             `silhouetteSize(tier)` wide × high × deep. The declared height is
+ *             the envelope: detail (a ridge, a foot) must live **inside** it, so
+ *             the label anchor and the framing keep reading one number.
+ *   - `base`  地牌: 顶面 on local y = 0 — it hangs directly under the body — with
+ *             the body's footprint plus `SHELF.plinthMargin` on every side, and
+ *             `SHELF.plinthThickness` tall.
+ *
+ * Both parts then seat with a single rule (`position.y = -SHELF.bodySeatY`), which
+ * is what keeps 座高 one fact instead of two per-part offsets that can drift. The
+ * world placement of these two meshes stayed byte-for-byte the pre-refactor box:
+ * 机体 y ∈ [-0.44, -0.44+h], 地牌 y ∈ [-0.66, -0.44].
+ *
+ * Unknown tier keys fall back to `SILHOUETTE_DEFAULT`, like `silhouetteSize`.
+ *
+ * @param {string} tierKey a key of SILHOUETTE_TIERS
+ * @returns {{ body: THREE.BufferGeometry, base: THREE.BufferGeometry }}
+ */
+export function buildTierGeometry(tierKey) {
+  const { height, width, depth } = silhouetteSize(tierKey)
+  const body = new THREE.BoxGeometry(width, height, depth).translate(0, height / 2, 0)
+  const base = new THREE.BoxGeometry(
+    width + SHELF.plinthMargin * 2, SHELF.plinthThickness, depth + SHELF.plinthMargin * 2)
+    .translate(0, -SHELF.plinthThickness / 2, 0)
+  return { body, base }
+}
+
+export default {
+  SILHOUETTE_TIERS, SILHOUETTE_DEFAULT, silhouetteTierOf, silhouetteSize,
+  SHELF, shelfGrid, shelfLayout, buildTierGeometry,
+}

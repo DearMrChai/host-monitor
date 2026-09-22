@@ -2,7 +2,8 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js'
 import { STATE, NEUTRAL, GROUND, LIGHTING, toRGB } from '../lib/palette.js'
-import { SHELF, silhouetteSize, silhouetteTierOf, shelfGrid } from '../lib/silhouette.js'
+import { SHELF, silhouetteSize, silhouetteTierOf, shelfLayout, buildTierGeometry } from '../lib/silhouette.js'
+import { createPlateEl, updatePlate } from '../lib/plate.js'
 
 /**
  * ClusterTopologyRenderer (V3 包 1 / 陈列架 A0)
@@ -19,6 +20,15 @@ import { SHELF, silhouetteSize, silhouetteTierOf, shelfGrid } from '../lib/silho
  *
  * One host = 站姿 + 高宽比 + 大小 (身份) + 面色 (状态) + 亮度 (负载). Nothing else:
  * 挂耳/格栅/灯点/logo 不当识别特征 (§7.2), 发光与描边不承载身份 (§5.3-甲档).
+ *
+ * This class is the **glue**, on purpose (V3 包 2 步 1). It owns the three.js
+ * scaffolding, the materials, the lighting and the framing; it owns none of the
+ * three axes it draws from, so each of them can be strengthened alone:
+ *   形状轴 `lib/silhouette.js`  buildTierGeometry  — 本文件不再 new 任何几何体
+ *   排布轴 `lib/silhouette.js`  shelfLayout        — 本文件不再算任何格子坐标
+ *   牌面轴 `lib/plate.js`       createPlateEl/updatePlate — 本文件不再出现牌面 HTML
+ * What stays here is the reading side: state colour, 假辉光强度 (案甲), the ABSENT
+ * treatment, and the 取景 that has to know where the shelf ends.
  */
 
 /* S4 §1.2: state and ground colours come from lib/palette.js, because the DOM's
@@ -205,13 +215,6 @@ export class ClusterTopologyRenderer {
     this._resize()
   }
 
-  _labelDiv(name, sub) {
-    const div = document.createElement('div')
-    div.className = 'topo-label'
-    div.innerHTML = `<div class="tl-name">${name}</div><div class="tl-sub">${sub}</div>`
-    return div
-  }
-
   /* ---------- data update ---------- */
 
   /**
@@ -227,17 +230,16 @@ export class ClusterTopologyRenderer {
       if (!ids.has(id)) { this._disposeObject(rec.group); this.nodes.delete(id) }
     }
 
-    /* 陈列架排版（任务书 B §1.1）：站一排，每格 SHELF.slotWidthPx(240px) 量级；
-       容器宽度装不下 maxSlotsPerRow 格即折第二排（往上层，前排不遮后排）。
-       折行阈值 960px = maxSlotsPerRow × slotWidthPx，是 shelfGrid() 里一个 floor()，
-       可核对，见 lib/silhouette.js。调用方预排序，故席位顺序确定。 */
-    const { cols } = shelfGrid(nodes.length, this.container.clientWidth || 800)
+    /* 陈列架排版（排布轴在 lib/silhouette.js 的 shelfLayout，任务书 B 包 2 步 1）：
+       站一排，每格 SHELF.slotWidthPx(240px) 量级；容器宽度装不下 maxSlotsPerRow 格
+       即折第二排（往上层，前排不遮后排）。折行阈值与槽距/排距任何一条改了，改的都
+       是 shelfLayout，不是这里——这里只消费坐标。调用方预排序，故席位顺序确定。 */
+    const seats = shelfLayout(nodes.length, this.container.clientWidth || 800)
     let halfW = 0
     let topY = 0
     let bottomY = Infinity
     nodes.forEach((n, i) => {
-      const x = ((i % cols) - (cols - 1) / 2) * SHELF.slotPitchWorld
-      const y = SHELF.baseY + Math.floor(i / cols) * SHELF.rowPitchWorld
+      const { x, y } = seats[i]
       let rec = this.nodes.get(n.id)
       if (!rec) {
         rec = this._makeNode(n)
@@ -266,11 +268,10 @@ export class ClusterTopologyRenderer {
       halfW = Math.max(halfW, Math.abs(x) + size.width / 2)
       topY = Math.max(topY, bodyTopY + SHELF.labelAboveBody + SHELF.plateHalfHeight)
       bottomY = Math.min(bottomY, y - SHELF.bodySeatY - SHELF.plinthThickness / 2)
-      /* 诚实性红线：牌面上那行小字原来写的是 rtt/丢包（链路读数），链路这一维
-         明着撤出墙之后，它只剩"这机器不在场"两种说法——空的那一行不补新话。 */
-      rec.labelEl.querySelector('.tl-name').textContent = n.name
-      rec.labelEl.querySelector('.tl-sub').textContent =
-        n.absent ? '离场（临时节点，不报警）' : !n.online ? '失联' : ''
+      /* 牌面轴在 lib/plate.js（包 2 步 1）：这一格写什么字、那行小字用哪句诚实
+         文案，都不在这个文件里说第二遍。链路的读数此前占着那一行，链路这一维明着
+         撤出墙（§5.3-2a）之后它只剩"这机器不在场"两种说法——空的那一行不补新话。 */
+      updatePlate(rec.labelEl, { name: n.name, absent: !!n.absent, online: !!n.online })
     })
 
     /* Kiosk 取景每次都算（容器宽度会变，折行也随之变）；交互页只算第一次，
@@ -282,40 +283,43 @@ export class ClusterTopologyRenderer {
   }
 
   /**
-   * One host = one box, sized by its own tier (任务书 B §1.2).
-   * 真比例：几何 = ratio × unit 的绝对值，不随槽口归一化。槽口（SHELF.slotPitchWorld
-   * 3.4 世界单位 = 墙上 240px 一格）只是**席位间距**，不是尺寸的模子：机架档机体
-   * 2.56 宽、笔记本档 1.44、微型档 0.7，三档各是各的，槽口对谁都不改制。
-   * 档变了就换几何并释放旧的——只换 position 会让旧模子留在显存里（S4 §2.4）。
+   * One host = one box, sized by its own tier (任务书 B §1.2 / 包 2 步 1).
+   * 真比例：几何由 `buildTierGeometry` 造，尺寸来自 ratio × unit 的绝对值，不随槽口
+   * 归一化。槽口（SHELF.slotPitchWorld 3.4 世界单位 = 墙上 240px 一格）只是**席位
+   * 间距**，不是尺寸的模子：机架档机体 2.56 宽、笔记本档 1.44、微型档 0.7，三档各自
+   * 是各的，槽口对谁都不改制。
+   * 两件零件都不在这个文件里画（形状轴单点），这里只做两件事：换几何并释放旧的（只换
+   * position 会让旧模子留在显存里，S4 §2.4），以及把两件零件按同一条座高规则坐下——
+   * `buildTierGeometry` 保证机体底面与地牌顶面都在各自的局部 y=0 上，所以两者共用
+   * 一个 -SHELF.bodySeatY，座高因此是一个事实而不是两个每零件偏移。
    */
   _applyTier(rec, n) {
     const tier = silhouetteTierOf(n)
     if (rec.tier === tier) return
-    const { height, width, depth } = silhouetteSize(tier)
+    const { height } = silhouetteSize(tier)
+    const g = buildTierGeometry(tier)
     rec.body.geometry.dispose()
-    rec.body.geometry = new THREE.BoxGeometry(width, height, depth)
-    rec.body.position.y = -SHELF.bodySeatY + height / 2
+    rec.body.geometry = g.body
+    rec.body.position.y = -SHELF.bodySeatY
     rec.base.geometry.dispose()
-    rec.base.geometry = new THREE.BoxGeometry(
-      width + SHELF.plinthMargin * 2, SHELF.plinthThickness, depth + SHELF.plinthMargin * 2)
+    rec.base.geometry = g.base
+    rec.base.position.y = -SHELF.bodySeatY
     rec.label.position.y = -SHELF.bodySeatY + height + SHELF.labelAboveBody
     rec.tier = tier
   }
 
   _makeNode(n) {
     const tier = silhouetteTierOf(n)
-    const { height, width, depth } = silhouetteSize(tier)
+    const { height } = silhouetteSize(tier)
+    const { body: bodyGeo, base: baseGeo } = buildTierGeometry(tier)
     const group = new THREE.Group()
     /* 地牌：原来它是「底座 = 链路色」的载体，链路撤出墙之后它只剩一块台板——
        颜色沿用 GRAY（palette 已有的中性色），不新增也不修改任何色值。
-       厚度 0.22 与「牌顶在组原点下 0.44」是星型时代的现值，数值搬进参数表，
+       厚度与「牌顶在组原点下 0.44」是星型时代的现值，数值搬进参数表，
        好让折行不变量（地牌不撞邻格、标签不压上层牌）能被自检从表里算出来。 */
     const baseMat = new THREE.MeshStandardMaterial({ color: GRAY, roughness: 0.8 })
-    const base = new THREE.Mesh(
-      new THREE.BoxGeometry(
-        width + SHELF.plinthMargin * 2, SHELF.plinthThickness, depth + SHELF.plinthMargin * 2),
-      baseMat)
-    base.position.y = -(SHELF.bodySeatY + SHELF.plinthThickness / 2)
+    const base = new THREE.Mesh(baseGeo, baseMat)
+    base.position.y = -SHELF.bodySeatY
     base.userData.hostId = n.id
     group.add(base)
     /* The body is born dark (intensity 0): `update()`, the same pass that
@@ -330,11 +334,11 @@ export class ClusterTopologyRenderer {
       emissive: LC.OK,
       emissiveIntensity: 0,
     })
-    const body = new THREE.Mesh(new THREE.BoxGeometry(width, height, depth), bodyMat)
-    body.position.y = -SHELF.bodySeatY + height / 2
+    const body = new THREE.Mesh(bodyGeo, bodyMat)
+    body.position.y = -SHELF.bodySeatY
     body.userData.hostId = n.id
     group.add(body)
-    const label = new CSS2DObject(this._labelDiv(n.name, ''))
+    const label = new CSS2DObject(createPlateEl())
     label.position.set(0, -SHELF.bodySeatY + height + SHELF.labelAboveBody, 0)
     group.add(label)
     group.position.y = SHELF.baseY

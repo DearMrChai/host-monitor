@@ -22,7 +22,9 @@
 import { readFileSync } from 'node:fs'
 import {
   SILHOUETTE_TIERS, SILHOUETTE_DEFAULT, silhouetteSize, silhouetteTierOf, SHELF, shelfGrid,
+  shelfLayout, buildTierGeometry,
 } from '../src/lib/silhouette.js'
+import { plateSub } from '../src/lib/plate.js'
 
 let pass = 0
 const failures = []
@@ -313,6 +315,281 @@ function normalized(tierKey, slotPx) {
   const b = silhouetteTierOf({ ...rec })
   if (a === b && JSON.stringify(rec) === before) ok('silhouetteTierOf 无副作用、可重复（输入只取 display_name / host_id 两个字符串）')
   else bad('档名函数不再单纯', `${a}/${b} rec=${JSON.stringify(rec)}`)
+}
+
+/* ==========================================================================
+   V3 包 2 步 1 · 三条「单点验收」
+   --------------------------------------------------------------------------
+   上面那些断言量的是**读数**（三档分不分得开、折行折得对不对）。这一节量的是
+   **改动点的数量**——用户要的是"想优化某个容器布局，我可以单独按模块去加强"，
+   所以判法做成可核对的一句话：改某一档的形状 / 改折行规则 / 改牌面排版，
+   各自要动的文件数必须是 1，且渲染器一行不动。
+   写法上的规矩（色表纪律 R-6）：每一处「零命中」都当场喂一条**已知该命中**的
+   输入给同一条模式当正对照，对照打不中就把这条判成 FAIL——一个抓不到东西的
+   探针报 0，等于没测。对照源全部是仓库里的真文件（A1 的 TopologyRenderer.js
+   本轮一行不碰，正好当"牌面 HTML 长什么样"的实物对照）。
+   ========================================================================== */
+
+const readSrc = (rel) => readFileSync(new URL(`../src/${rel}`, import.meta.url), 'utf8')
+const hitsOf = (text, re) => [...text.matchAll(new RegExp(re.source, 'g'))].length
+
+/* 「单点」那几条数的是**代码**里的命中，不是散文里的提法。渲染器注释里出现
+   `slotPitchWorld`，说的是"格子坐标我不再自己算"（这一版刚写下的解释）；把它算成
+   坐标算式残留，等于要求我先删掉注释才能过——那条尺子就不再量东西了。
+   所以先剥注释再扫。剥法是个小状态机（认 //、块注释、三种引号），它自己也可能咬到
+   代码，于是留一道闸：剥完必须还读得到两个函数头，读不到＝尺子坏了，三条轴一律 FAIL。 */
+const stripComments = (text) => {
+  let out = ''
+  let mode = 'code'
+  for (let i = 0; i < text.length; i += 1) {
+    const c = text[i]
+    const n = text[i + 1]
+    if (mode === 'code') {
+      if (c === '/' && n === '/') { mode = 'line'; i += 1; continue }
+      if (c === '/' && n === '*') { mode = 'block'; i += 1; continue }
+      if (c === "'") mode = 'sq'
+      else if (c === '"') mode = 'dq'
+      else if (c === '`') mode = 'tpl'
+      out += c
+      continue
+    }
+    if (mode === 'line') {
+      if (c === '\n') { mode = 'code'; out += c }
+      continue
+    }
+    if (mode === 'block') {
+      if (c === '*' && n === '/') { mode = 'code'; i += 1; continue }
+      if (c === '\n') out += c            // 行结构留着，免得两行代码被接成一行
+      continue
+    }
+    out += c                              // 字符串里的字面量是代码，不是散文
+    if (c === '\\') { out += text[i + 1]; i += 1 }
+    else if (c === "'" && mode === 'sq') mode = 'code'
+    else if (c === '"' && mode === 'dq') mode = 'code'
+    else if (c === '`' && mode === 'tpl') mode = 'code'
+  }
+  return out
+}
+const readCode = (rel) => stripComments(readSrc(rel))
+
+const A0_SRC = readCode('three/ClusterTopologyRenderer.js')  // 本包的改造对象（只看代码）
+const SIL_SRC = readCode('lib/silhouette.js')
+const PLATE_SRC = readCode('lib/plate.js')
+const A1_SRC = readSrc('three/TopologyRenderer.js')           // 只读：正对照 + 一行未动（全文，含它自己的注释）
+const STATUS_SRC = readSrc('lib/status.js')
+
+/** 剥注释的闸：三个单点判据共用的"尺子还灵不灵"读数。函数头之外还要读得到渲染器
+ *  自己的两处代码——字符串里有单引号，状态机若被哪个字面量带偏，最先丢的就是这些。 */
+const CODE_INTACT = /export function buildTierGeometry\b/.test(SIL_SRC)
+  && /export function shelfLayout\b/.test(SIL_SRC)
+  && /export function createPlateEl\b/.test(PLATE_SRC)
+  && /_applyTier\(rec, n\)/.test(A0_SRC)
+  && /updatePlate\(/.test(A0_SRC)
+
+/** 三档实测几何体，测完一次给下面两个块共用（bbox 也已算好）。 */
+const GEO = {}
+
+/* ---------- 形状轴：某台机器怎么画，只有一个函数 ---------- */
+
+{
+  /* 只数**机器图元**。地面那块 CircleGeometry 与 GridHelper 是场景家具、不是"某台
+     机器怎么画"，把它们一起算进来会让这条判据变成一个我必须绕开它才能通过的数。 */
+  const MACHINE_GEO = /new THREE\.(?:Box|Cylinder|Sphere|Cone|Capsule|Torus|Lathe|Extrude|Shape|RoundedBox|Plane)Geometry\b/
+  const inRenderer = hitsOf(A0_SRC, MACHINE_GEO)
+  const control = hitsOf(SIL_SRC, MACHINE_GEO) + hitsOf(A1_SRC, MACHINE_GEO)
+  if (!CODE_INTACT) bad('形状轴单点：渲染器不再为机器造几何体', '尺子失效——剥注释时把 lib 的函数头也剥掉了，这个 0 不是读数')
+  else if (control === 0) bad('形状轴单点：渲染器不再为机器造几何体', `尺子失效——正对照（lib/silhouette.js ＋ A1）也零命中，这个 0 不是读数`)
+  else if (inRenderer === 0) ok(`形状轴单点：A0 渲染器里机器图元 0 处（正对照同模式命中 ${control} 处＝工厂自己的 BoxGeometry ×${hitsOf(SIL_SRC, MACHINE_GEO)} ＋ 未动的 A1 ×${hitsOf(A1_SRC, MACHINE_GEO)}）—— 换某一档的形状只改 buildTierGeometry`)
+  else bad('形状轴单点', `A0 渲染器里仍有 ${inRenderer} 处机器图元，形状还没有一个家`)
+}
+
+{
+  /* 工厂的合同：机体底面在局部 y=0、总高等于**声明**高度（取景与标签锚点读的是声明
+     值），地牌顶面也在局部 y=0（牌与机体之间不许有第二套座高）。合同不成立，"只改一
+     个函数"就变成"改完还要去改渲染器"。
+     容差 GEO_TOL 不是随手放的松：顶点存在 Float32Array 里，量到的是 GPU 那份顶点而不是
+     JS 的双精度声明值，1e-9 会把 float32 的固有误差读成合同破了（实测 0.09 存成
+     0.09000000357627869）。世界单位最大 3.4，1e-6 既盖得住 float32 的分辨率，又远小于
+     任何看得出来的形变（墙上 1 世界单位 = 70.6px，1e-6 单位 = 0.00007px）。 */
+  const GEO_TOL = 1e-6
+  const near = (a, b) => Math.abs(a - b) < GEO_TOL
+  const wrong = []
+  const reads = []
+  for (const k of TIERS) {
+    const s = silhouetteSize(k)
+    const { body, base } = buildTierGeometry(k)
+    body.computeBoundingBox(); base.computeBoundingBox()
+    GEO[k] = { body, base }
+    const b = body.boundingBox, p = base.boundingBox
+    const size = (box, ax) => box.max[ax] - box.min[ax]
+    if (!near(b.min.y, 0)) wrong.push(`${k}.body 底面不在局部 y=0（yMin=${b.min.y}）`)
+    if (!near(b.max.y, s.height)) wrong.push(`${k}.body 总高 ${b.max.y} ≠ 声明高 ${s.height}`)
+    if (!near(size(b, 'x'), s.width) || !near(size(b, 'z'), s.depth)) wrong.push(`${k}.body 平面尺寸 ≠ silhouetteSize`)
+    if (!near((b.min.x + b.max.x) / 2, 0) || !near((b.min.z + b.max.z) / 2, 0)) wrong.push(`${k}.body 未在 x/z 居中（席位会整体偏）`)
+    if (!near(p.max.y, 0)) wrong.push(`${k}.base 顶面不在局部 y=0：牌与机体之间出现第二套座高`)
+    if (!near(p.min.y, -SHELF.plinthThickness)) wrong.push(`${k}.base 厚 ${-p.min.y} ≠ plinthThickness ${SHELF.plinthThickness}`)
+    const wantW = s.width + SHELF.plinthMargin * 2
+    if (!near(size(p, 'x'), wantW) || !near(size(p, 'z'), s.depth + SHELF.plinthMargin * 2)) wrong.push(`${k}.base ≠ 机体 footprint ＋ 每侧 ${SHELF.plinthMargin}`)
+    reads.push(`${k} 机体 ${size(b, 'x').toFixed(2)}×${size(b, 'y').toFixed(2)}×${size(b, 'z').toFixed(2)} y∈[${b.min.y.toFixed(2)},${b.max.y.toFixed(2)}] 地牌 y∈[${p.min.y.toFixed(2)},${p.max.y.toFixed(2)}]`)
+  }
+  if (!wrong.length) ok(`buildTierGeometry 合同成立（三档，容差按 float32 顶点分辨率放 ${GEO_TOL}）：机体底面 y=0 且总高＝声明高、地牌顶面 y=0 且＝footprint＋每侧边 —— ${reads.join(' | ')}`)
+  else bad('buildTierGeometry 的几何合同被破', wrong.join('; '))
+}
+
+{
+  /* 两件配套的事：① 换局部原点必须是等价改动（世界摆放不能跟着动）；
+     ② 工厂每次调用必须返回**新**几何体，因为 _applyTier 换档时 dispose() 旧的——
+        若两档共用同一实例，一次换档会把另一台在用的模子从显存里释放掉。 */
+  const wrong = []
+  for (const k of TIERS) {
+    const s = silhouetteSize(k)
+    const { body, base } = GEO[k]
+    // 渲染器把两件都坐在 -bodySeatY 上（见 _makeNode/_applyTier）
+    const bodyTop = -SHELF.bodySeatY + body.boundingBox.max.y
+    const baseBottom = -SHELF.bodySeatY + base.boundingBox.min.y
+    if (Math.abs(bodyTop - (-SHELF.bodySeatY + s.height)) > 1e-6) wrong.push(`${k} 机体顶 ${bodyTop} ≠ 包 1 的读数 ${-SHELF.bodySeatY + s.height}`)
+    if (Math.abs(baseBottom - (-SHELF.bodySeatY - SHELF.plinthThickness)) > 1e-6) wrong.push(`${k} 地牌底 ${baseBottom} ≠ 包 1 的读数 ${-SHELF.bodySeatY - SHELF.plinthThickness}`)
+    if (Math.abs(-SHELF.bodySeatY + base.boundingBox.max.y + SHELF.bodySeatY) > 1e-6) wrong.push(`${k} 地牌顶与机体底之间有缝（两块会脱开）`)
+  }
+  if (buildTierGeometry('mini').body === buildTierGeometry('mini').body) wrong.push('工厂返回了同一实例：换档 dispose() 会放掉另一台在用的几何体')
+  if (!wrong.length) ok(`形状轴重构是等价改动＋可安全释放：三档机体顶/地牌底的世界坐标与包 1 逐位相同，且每次调用返回新几何体（dispose 不会误伤邻格）`)
+  else bad('形状轴重构不是等价改动', wrong.join('; '))
+}
+
+/* ---------- 排布轴：每排几格、折几排、格子落在哪，只有一个函数 ---------- */
+
+{
+  const probes = [[0, 1200], [1, 240], [3, 100], [4, 1920], [4, 959], [6, 960], [12, 1200]]
+  const wrong = []
+  for (const [count, width] of probes) {
+    const seats = shelfLayout(count, width)
+    const { cols, rows } = shelfGrid(count, width)
+    if (seats.length !== count) wrong.push(`${count}@${width} 席位 ${seats.length} ≠ 台数`)
+    seats.forEach((p, i) => {
+      const x = ((i % cols) - (cols - 1) / 2) * SHELF.slotPitchWorld
+      const y = SHELF.baseY + Math.floor(i / cols) * SHELF.rowPitchWorld
+      if (Math.abs(p.x - x) > 1e-12 || Math.abs(p.y - y) > 1e-12) wrong.push(`${count}@${width} 第 ${i} 席 (${p.x},${p.y}) ≠ (${x},${y})`)
+    })
+    if (Math.max(1, Math.ceil(count / cols)) !== rows && count > 0) wrong.push(`${count}@${width} 排数与 shelfGrid 不一致`)
+  }
+  if (!wrong.length) ok(`shelfLayout 七点实测（含 0 台 / 窄容器退化 1 列）：坐标与包 1 的折行算式逐位相同 —— 抽函数是搬家不是改口径`)
+  else bad('shelfLayout 与折行口径不一致', wrong.join('; '))
+}
+
+{
+  /* 6 台 @ 960px → 4 列两排。钉的是包 1 的**列网格**口径：第 i 席永远站在第 i%cols 列
+     上，末排不满时靠左 packed、不重新居中，所以上下排同列同 x、机体对齐成列。
+     （这一条判据我第一版写反过：按"每排关于 0 居中"去要，那是逐排居中的读法，会把
+     第二排两台往中间吸，和包 1 的算式对不上——上一块刚证明算式没改，所以错的是这条
+     尺子。改法是把它写成真口径，并在下面留一条反例，让它真的能抓到逐排居中。） */
+  const seats = shelfLayout(6, 960)
+  const { cols } = shelfGrid(6, 960)
+  const wrong = []
+  const seen = new Set(seats.map((p) => `${p.x.toFixed(6)},${p.y.toFixed(6)}`))
+  if (seen.size !== seats.length) wrong.push('两个席位落在同一个位置（会叠成一台）')
+  const colX = Array.from({ length: cols }, (_, c) => (c - (cols - 1) / 2) * SHELF.slotPitchWorld)
+  seats.forEach((p, i) => {
+    if (Math.abs(p.x - colX[i % cols]) > 1e-9) wrong.push(`第 ${i} 席 x=${p.x.toFixed(3)} 不在第 ${i % cols} 列位 ${colX[i % cols].toFixed(3)} 上（上下排不同列，机体互相错位）`)
+  })
+  const rows = [...new Set(seats.map((p) => p.y))].sort((a, b) => a - b)
+  rows.forEach((y, r) => {
+    const n = seats.filter((p) => p.y === y).length
+    const want = r === rows.length - 1 ? seats.length - r * cols : cols
+    if (n !== want) wrong.push(`第 ${r + 1} 排 ${n} 席，应为 ${want} 席（packed 顺序乱了）`)
+  })
+  for (const y of rows) {
+    const row = seats.filter((p) => p.y === y).sort((a, b) => a.x - b.x)
+    for (let i = 1; i < row.length; i += 1) {
+      const gap = row[i].x - row[i - 1].x
+      if (Math.abs(gap - SHELF.slotPitchWorld) > 1e-9) wrong.push(`邻席间距 ${gap} ≠ 槽距 ${SHELF.slotPitchWorld}`)
+    }
+  }
+  for (let i = 1; i < rows.length; i += 1) {
+    if (Math.abs((rows[i] - rows[i - 1]) - SHELF.rowPitchWorld) > 1e-9) wrong.push(`排间距 ${rows[i] - rows[i - 1]} ≠ 排距 ${SHELF.rowPitchWorld}`)
+  }
+  /* 整张网格的左右边界：最外列的列心 ± 半个槽口就是格子的边，最宽那档（rack，含地牌
+     3.06）的外沿不许越过——这条是"槽口对谁都不改制"的可核对版本。 */
+  const widestPlate = Math.max(...TIERS.map((k) => silhouetteSize(k).width + SHELF.plinthMargin * 2))
+  const used = Math.max(...seats.map((p) => Math.abs(p.x))) + widestPlate / 2
+  const gridHalf = (cols * SHELF.slotPitchWorld) / 2
+  if (used > gridHalf + 1e-9) wrong.push(`最宽地牌外沿到 ${used.toFixed(2)} 世界单位 > 网格半宽 ${gridHalf.toFixed(2)}（出格）`)
+  /* 反例：逐排居中长什么样，这里当场算一遍，确认本口径与它不同（相同就说明这条没牙）。 */
+  const lastRow = seats.filter((p) => p.y === rows[rows.length - 1])
+  if (lastRow.length < cols) {
+    const perRowCentered = lastRow.map((_, c) => (c - (lastRow.length - 1) / 2) * SHELF.slotPitchWorld)
+    if (lastRow.every((p, c) => Math.abs(p.x - perRowCentered[c]) < 1e-9)) wrong.push('末排被逐排居中了：与包 1 的列网格口径不符，上下排不再对齐')
+  }
+  if (!wrong.length) ok(`排布不变量（6 台@960 实测 ${cols} 列 ${rows.length} 排）：席位互不相同 · 每席踩在自己的列位上（末排靠左 packed，不逐排居中）· 邻席恰为一个槽距 · 排间距恰为一个排距 · 最宽地牌外沿 ${used.toFixed(2)} ≤ 网格半宽 ${gridHalf.toFixed(2)}`)
+  else bad('排布不变量被破', wrong.join('; '))
+}
+
+{
+  const COORD = /slotPitchWorld|rowPitchWorld|% cols|Math\.floor\(i \/ /
+  const inRenderer = hitsOf(A0_SRC, COORD)
+  const control = hitsOf(SIL_SRC, COORD)
+  if (!CODE_INTACT) bad('排布轴单点：渲染器不再算格子坐标', '尺子失效——剥注释把 lib 的函数头也剥掉了')
+  else if (control === 0) bad('排布轴单点：渲染器不再算格子坐标', '尺子失效——正对照（lib/silhouette.js）也零命中')
+  else if (inRenderer === 0) ok(`排布轴单点：A0 渲染器里坐标算式 0 处（正对照同模式在 lib/silhouette.js 命中 ${control} 处）—— 改折行/槽距/排距只改 shelfLayout`)
+  else bad('排布轴单点', `A0 渲染器里还有 ${inRenderer} 处坐标算式：${(A0_SRC.match(new RegExp(COORD.source, 'g')) || []).join(' / ')}`)
+}
+
+/* ---------- 牌面轴：这一格写什么字、字怎么排，只有一个模块 ---------- */
+
+{
+  /* 牌面模板与选择器都不该在渲染器里。对照物用的是**没被本轮碰过**的 A1：同一条模式
+     在它身上必须命中，否则这条"0"是探针坏了。 */
+  const PLATE_HTML = /innerHTML|<div\s+class|\.tl-name|\.tl-sub|querySelector/
+  const inRenderer = hitsOf(A0_SRC, PLATE_HTML)
+  const control = hitsOf(A1_SRC, PLATE_HTML)
+  const plateOwns = hitsOf(PLATE_SRC, PLATE_HTML)
+  if (!CODE_INTACT) bad('牌面轴单点：渲染器不再出现牌面 HTML/选择器', '尺子失效——剥注释把 plate.js 的函数头也剥掉了')
+  else if (control === 0) bad('牌面轴单点：渲染器不再出现牌面 HTML/选择器', '尺子失效——正对照（A1 TopologyRenderer.js）也零命中')
+  else if (inRenderer !== 0) bad('牌面轴单点', `A0 渲染器里还有 ${inRenderer} 处牌面模板/选择器：${(A0_SRC.match(new RegExp(PLATE_HTML.source, 'g')) || []).join(' / ')}`)
+  else if (plateOwns === 0) bad('牌面轴单点', 'lib/plate.js 也没有牌面结构了？牌面没有家了')
+  else ok(`牌面轴单点：A0 渲染器 0 处牌面 HTML／选择器（正对照 A1 命中 ${control} 处，牌面的家 lib/plate.js 命中 ${plateOwns} 处）`)
+}
+
+{
+  /* 牌面不许自带样式：色值只能有 palette.js / :root 两个家，DOM 侧再写一支就是
+     H9 那个形状。对照＝palette.js 自己（本脚本另一处已经用它验过同族判据）。 */
+  const COLOR = /#[0-9a-fA-F]{3,8}\b|0x[0-9a-fA-F]{6}\b|rgba?\(/
+  const inPlate = hitsOf(PLATE_SRC, COLOR)
+  const inlineStyle = hitsOf(PLATE_SRC, /\.style\.[a-zA-Z]/)
+  const control = hitsOf(readSrc('lib/palette.js'), COLOR)
+  if (!CODE_INTACT) bad('牌面零色值缺正对照', '尺子失效——剥注释把 plate.js 的函数头也剥掉了')
+  else if (control < 20) bad('牌面零色值缺正对照', `palette.js 只量到 ${control} 支，这条尺子不算数`)
+  else if (inPlate || inlineStyle) bad('牌面自带样式了', `色值 ${inPlate} 处、内联 style ${inlineStyle} 处——牌面只管结构，样式在 style.css`)
+  else ok(`牌面轴只管结构：lib/plate.js 色值 0 支、内联 style 0 处（正对照：同一条正则从 palette.js 量到 ${control} 支）`)
+}
+
+{
+  /* 截断只许有一处口径：topology-vm.js 调 status.js 的 shortName（§1.3 节点名 ≤8 字）。
+     牌面里再写一套 slice/省略号，墙上和场景就会对同一台机器给出两个名字。 */
+  const TRUNC = /\.slice\(|\.substring\(|padEnd|…/
+  const inPlate = hitsOf(PLATE_SRC, TRUNC)
+  const control = hitsOf(STATUS_SRC, TRUNC)
+  if (!CODE_INTACT) bad('截断只有一个家缺正对照', '尺子失效——剥注释把 plate.js 的函数头也剥掉了')
+  else if (control === 0) bad('牌面不再自截断缺正对照', 'status.js 里量不到截断写法，这条尺子不算数')
+  else if (inPlate) bad('牌面里出现第二套截断', `命中 ${inPlate} 处——截断的口径在 status.js 的 shortName，由 topology-vm 应用`)
+  else ok(`截断只有一个家：lib/plate.js 0 处截断写法（正对照：status.js 的 shortName 命中 ${control} 处），牌面只写送进来的名字`)
+}
+
+{
+  /* 小字文案 = 诚实性文案，照字保留（不许润色成更好听的说法）。这里钉的是**字面**，
+     不是"语义相近"：在场且活着的机器没有状态句，所以空串是正确读数而不是待填的坑。 */
+  const cases = [
+    [{ absent: true, online: false }, '离场（临时节点，不报警）', 'absent 赢 online：临时节点离开不是失联'],
+    [{ absent: false, online: false }, '失联', '常驻节点不再上报'],
+    [{ absent: false, online: true }, '', '在场的机器牌面上没有第二句状态（状态由机体色相说）'],
+    [{}, '失联', '字段缺失时按不在场说，不猜"正常"'],
+  ]
+  const wrong = []
+  for (const [rec, want, why] of cases) {
+    const got = plateSub(rec)
+    if (got !== want) wrong.push(`${JSON.stringify(rec)} → 「${got}」，应为「${want}」（${why}）`)
+  }
+  if (!wrong.length) ok(`牌面小字三句口径逐字钉住（含空串那一格），且 absent 优先于 online：${cases.map((c) => `「${c[1] || '∅'}」`).join(' / ')}`)
+  else bad('牌面文案被改了', wrong.join('; '))
 }
 
 console.log(`\n[selftest-silhouette] pass=${pass} fail=${failures.length}`)
