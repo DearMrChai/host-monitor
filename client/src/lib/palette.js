@@ -10,6 +10,11 @@
  * are the colours of physical objects, not of a status dimension, so S4 §1.1
  * rule 1 does not apply to them and they stay where they are.
  *
+ * That note is about **decoration**, and package 4 kept it: the A1 PCB/copper/gold
+ * family is still in that file and still is not pallettised, because those numbers
+ * state no fact about the fleet. What *did* move in is `LOAD` below — A1's last
+ * off-table family, and one that does state a fact (how busy this box is).
+ *
  * Why the **structure** family lives here too (V3 cut 2, 任务书 §6.1): cut 1 put
  * those tokens in `style.css :root` only, while their other consumer — the 3D bus
  * traces — reads this file. That is the same "one fact, two homes" shape H9 was
@@ -28,6 +33,34 @@ export const STATE = {
   WARN: '#d29922',
   CRIT: '#f85149',
   OFFLINE: '#9aa0a6',
+}
+
+/** 负载族 — V3 包 4 步 3 从 `TopologyRenderer.js` 的 `_loadColor` 里收编过来的四支。
+ *
+ *  **为什么不复用上面的 STATE（这是本包最重要的一条判据，越界即作废重做）**：
+ *  `STATE.*` 说的是"这台机器健康不健康"，`LOAD.*` 说的是"这台机器此刻有多忙"。
+ *  V3 的第一通道规则是**亮度＝负载、色相＝状态，两维独立**（任务书 §5.3 裁定与 H30
+ *  都建立在这条上）。把 `LOAD.HIGH` 指回 `STATE.CRIT` 就是拿一个键焊死两个通道——
+ *  以后想单独把负载色调慢一档，就会顺手动到告警色。
+ *  ⚠️ 顺带订正派单里的一句话：这两族**连"当前数值恰好相同"都不是**——实测
+ *  `STATE = #3fb950/#d29922/#f85149` 而 `LOAD = #4caf50/#ff9800/#f44336`，三支全不同值
+ *  （只有"都是绿橙红三个色相"这一点像）。所以"并道"不只是纪律问题，它当时就会改画面。
+ *
+ *  四支的值**逐字节等于 `_loadColor` 原来的四个 `0x` 字面量**（收编＝搬.home，不是调色）：
+ *  所以 `00-暂存/contrast-check.mjs` 本包没有重跑——它量的是"色对底够不够"，而这里
+ *  没有一支色换过值、也没有一面底换过值。**这是一个关于数字的论断，不是关于屏幕的**：
+ *  画面到底有没有变化，仍未人眼验过。
+ *
+ *  `NONE` 不是"零负载"：`_loadColor(null)` 走的是"这台没报负载"那一路（与
+ *  `status.js` 的 `loadOf() === -1`、牌面上的 `∅` 同一维事实）。零负载是 LOW。
+ *
+ *  与 COOLANT／LIGHTING 同理，**不进 check-tokens 的成对表**：DOM 侧没有"负载色"这个
+ *  图例可对照（DOM 的负载条走的是状态色那条通道，是另一件事），硬配会造出一个假事实。 */
+export const LOAD = {
+  NONE: '#455a64',   // 没报负载
+  LOW: '#4caf50',    // 0%
+  MID: '#ff9800',    // 50%（两段的接缝，不是"警告"）
+  HIGH: '#f44336',   // 100%
 }
 
 /** Scene grounds, so a re-skin is one file rather than four scattered literals.
@@ -157,4 +190,4 @@ export function levelColor(level) {
   return hex == null ? null : toRGB(hex)
 }
 
-export default { STATE, GROUND, LIGHTING, NEUTRAL, STRUCT, COOLANT, toRGB, levelColor }
+export default { STATE, LOAD, GROUND, LIGHTING, NEUTRAL, STRUCT, COOLANT, toRGB, levelColor }

@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js'
-import { GROUND, NEUTRAL, STRUCT, COOLANT, toRGB } from '../lib/palette.js'
+import { GROUND, NEUTRAL, STRUCT, COOLANT, LOAD, toRGB } from '../lib/palette.js'
 
 /**
  * TopologyRenderer (v3 - Realistic PCB)
@@ -1007,10 +1007,15 @@ export class TopologyRenderer {
     }
   }
 
+  /* 负载 → 场景色。四支值现在是 `palette.js` 的 LOAD 族（V3 包 4 步 3 收编），
+     这一族表达的是**忙不忙**，与 STATE 的**好不好**是两条独立通道（色表 R-1）——
+     所以它不许指回 STATE.OK/WARN/CRIT，见 palette.js 里 LOAD 那段注释。
+     插值算式与收编前逐字相同：LOW→MID 走 0~50、MID→HIGH 走 50~100，两段的接缝在 50。
+     `null` 不是 0：它走 NONE，因为"这台没报负载"和"这台闲着"是两件事。 */
   _loadColor(percent) {
-    if (percent == null) return new THREE.Color(0x455a64)
-    if (percent < 50) return new THREE.Color(0x4caf50).lerp(new THREE.Color(0xff9800), percent / 50)
-    return new THREE.Color(0xff9800).lerp(new THREE.Color(0xf44336), (percent - 50) / 50)
+    if (percent == null) return new THREE.Color(toRGB(LOAD.NONE))
+    if (percent < 50) return new THREE.Color(toRGB(LOAD.LOW)).lerp(new THREE.Color(toRGB(LOAD.MID)), percent / 50)
+    return new THREE.Color(toRGB(LOAD.MID)).lerp(new THREE.Color(toRGB(LOAD.HIGH)), (percent - 50) / 50)
   }
 
   /* ---------- Labels ---------- */

@@ -25,6 +25,8 @@ import {
   shelfLayout, buildTierGeometry,
 } from '../src/lib/silhouette.js'
 import { plateSub } from '../src/lib/plate.js'
+/* V3 包 4 步 3 追加：两族色要**当值比**（不是当文本比），所以从 palette.js 读进来。 */
+import { STATE, LOAD } from '../src/lib/palette.js'
 
 let pass = 0
 const failures = []
@@ -899,6 +901,93 @@ const PLATE_RULES = STYLE_PLATE.concat(KIOSK_PLATE)
   console.log(`\n[包 4 登记·非判据] topology-vm.js 对 form_factor 的转发 = ${fwd('form_factor')} 处`
     + `（正对照：同一条扫描读到同族的 online 转发 ${ctrl} 处${ctrl ? '＝尺子看得见这个白名单' : '＝⚠️ 尺子瞎了，左边那个数不算读数'}）。`
     + `\n                  ⇒ 0 处意味着：服务端声明现在到不了 A0，档名仍全靠猜。补那一行不在本包授权内，交他裁。`)
+}
+
+/* ==========================================================================
+   V3 包 4 步 3 · A1 的负载色收进唯一色源，但**收编不等于并道**（任务书 §5.5 步 3）
+   --------------------------------------------------------------------------
+   `_loadColor` 那四支表达**忙不忙**，`palette.STATE` 那四支表达**好不好**。V3 的第一
+   通道规则是"亮度＝负载、色相＝状态两维独立"，所以这一族必须有自己的键。
+   下面每一条都配了派单点名的那条正对照：**同一条尺子必须仍然扫得到 PCB／铜／金
+   那族装饰色**——扫不到就是尺子瞎了，那时的"0 处字面量"不算读数。
+   ========================================================================== */
+
+{
+  const A1 = readSrc('three/TopologyRenderer.js')
+  const HEXLIT = /0x[0-9a-fA-F]{6}/g
+  const total = [...A1.matchAll(HEXLIT)].length
+  const body = /  _loadColor\(percent\) \{([\s\S]*?)\n  \}/.exec(A1)
+  if (!body) { bad('读不到 _loadColor 函数体', '形状变了，下面几条全部作废重判') }
+  else {
+    const inBody = [...body[1].matchAll(HEXLIT)].length
+    const moved = [...body[1].matchAll(/\bLOAD\.(\w+)/g)].length
+    const MOVED_AS_DISPATCHED = 5   // 0x455a64 ×1 + 0x4caf50 ×1 + 0xff9800 ×2 + 0xf44336 ×1，派单【落笔前事实】那一段
+    const BASELINE = 56     // 包 4 动手之前同一条正则在同一文件的读数
+    const deco = ['0x1b7a1b', '0xb87333', '0xffd700']
+      .map((h) => ({ h, n: [...A1.matchAll(new RegExp(h, 'g'))].length }))
+    /* 正对照先判，再允许它报"零"（R-6 的顺序）：装饰色扫不到 ⇒ 函数体那个 0 不是读数。 */
+    if (deco.some((d) => d.n === 0)) {
+      bad('负载色扫描缺正对照', `同一条尺子在 A1 里读不到装饰色 ${deco.filter((d) => d.n === 0).map((d) => d.h).join(', ')} ⇒ 函数体那个"0 处"不算读数，尺子瞎了`)
+    } else if (inBody !== 0) {
+      bad('_loadColor 里仍有表外色值', `函数体内还有 ${inBody} 支 0x 字面量；颜色只有 palette.js / :root 两个家`)
+    } else if (total !== BASELINE - MOVED_AS_DISPATCHED || moved !== MOVED_AS_DISPATCHED) {
+      bad('收编的账不平', `全文件 ${BASELINE} → ${total}（降 ${BASELINE - total}），但函数体内 LOAD.* 引用 ${moved} 次、派单登记搬走 ${MOVED_AS_DISPATCHED} 支 ⇒ **下降数必须等于搬走数**，否则要么有人往里塞了新字面量，要么把不相干的色一起搬走了`)
+    } else {
+      ok(`A1 负载色收编：_loadColor 函数体 0 支字面量、走 LOAD.* ${moved} 次；全文件 0x 计数 ${BASELINE}→${total}（降 ${BASELINE - total}＝搬走数）`
+        + `（正对照：同一条尺子仍扫到未收编的装饰色 PCB ${deco[0].n}／铜 ${deco[1].n}／金 ${deco[2].n} 支——本轮不收编，它们不表达事实）`)
+    }
+    /* 三个调用点是授权范围的另一半，本包**没有**改它们：签名与语义都没动，改了才是越界。
+       钉成断言是为了"谁以后动这一族，先在这儿留下读数"。 */
+    const calls = [...A1.matchAll(/this\._loadColor\(/g)].length
+    if (calls === 3) ok(`_loadColor 的消费点仍恰 3 处（CPU／内存／GPU），签名未变＝本轮未动调用点`)
+    else bad('负载色的消费点数了', `实际 ${calls} 处，应为 3 处（授权是"只许动那三个调用点"，不是"必须动")`)
+  }
+}
+
+{
+  /* **收编不等于并道**的那道闸。两问：值不许撞、源码不许引用。
+     第一版派单说"当前数值恰好相同是巧合"——实测**连相同都不存在**（两族 4×4=16 对
+     逐对比过，0 对同值），所以把 LOAD.HIGH 指回 STATE.CRIT 当场就会改画面：
+     #f44336 → #f85149。这道闸因此不是洁癖，是一支会动像素的探针。 */
+  const clash = []
+  for (const [sk, sv] of Object.entries(STATE)) {
+    for (const [lk, lv] of Object.entries(LOAD)) {
+      if (String(sv).toLowerCase() === String(lv).toLowerCase()) clash.push(`${lk}===STATE.${sk}(${sv})`)
+    }
+  }
+  const keys = Object.keys(LOAD).sort().join(',')
+  const src = readSrc('lib/palette.js')
+  const loadBlock = /export const LOAD = \{([\s\S]*?)\n\}/.exec(src)
+  /* 只认**赋值位置**的 `: STATE.`（真并道长这样：`HIGH: STATE.CRIT`）。
+     第一版写的是 `/\bSTATE\s*\./`，结果变异 F 里它命中的是**我自己在注释里写的
+     "指回 STATE.CRIT"**——那是一次误红的实测，不是推演。注释里提一句状态色是合法的事。 */
+  const byRef = !!(loadBlock && /:\s*STATE\s*\./.test(loadBlock[1]))
+  if (keys === 'HIGH,LOW,MID,NONE' && !clash.length && !byRef) {
+    ok(`两族各走各的通道：LOAD 键集合 = ${keys}；与 STATE 的 16 对逐对比 0 同值；LOAD 块里 0 处把值写成 STATE.*（正对照：同一条尺子在 STATE 自己那族量到 ${Object.keys(STATE).length} 支）`)
+  } else bad('负载族与状态族并道了（本包越界即作废重做）', `键=${keys}; 同值对=${clash.join(', ') || '无'}; 源码引用 STATE=${byRef}`)
+}
+
+{
+  /* 保持原值：四支必须等于 `_loadColor` 收编前那四个 0x 字面量。
+     派单把"负载色要不要改值"列为**交他眼睛判**的项 ⇒ 本包只搬家、不调色。
+     这条断言就是那句"只登记不改值"的可重跑形态。 */
+  const WANT = { NONE: '0x455a64', LOW: '0x4caf50', MID: '0xff9800', HIGH: '0xf44336' }
+  const drift = Object.entries(WANT).filter(([k, v]) => LOAD[k]?.toLowerCase() !== `#${v.slice(2)}`).map(([k, v]) => `${k}=${LOAD[k]}（应为 ${v}）`)
+  if (!drift.length) ok(`LOAD 四支值逐字节等于收编前的字面量（${Object.values(WANT).join(' ')}）＝只搬家没调色`)
+  else bad('负载色被顺手改了值', drift.join('; ') + ' —— 这三档的具体颜色是"留给眼睛"的裁量项，本包无权改')
+}
+
+{
+  /* 负载族**不进** check-tokens 的成对表：DOM 侧没有"负载色"这块图例可对照，
+     硬配一支就是造一个假事实（与 COOLANT／LIGHTING 同一判法，任务书 §6.5）。
+     正对照＝同一条扫描读得到 STRUCT 那 12 对，所以"LOAD 0 对"是读数不是漏扫。 */
+  const gate = readFileSync(new URL('./check-tokens.mjs', import.meta.url), 'utf8')
+  const pairsOf = (g) => [...gate.matchAll(new RegExp(`\\['${g}'\\s*,`, 'g'))].length
+  const PAIRED = ['STATE', 'GROUND', 'NEUTRAL', 'STRUCT']
+  const blind = PAIRED.filter((g) => pairsOf(g) === 0)
+  if (pairsOf('LOAD') !== 0) bad('负载族被塞进了成对表', `check-tokens 里出现 ${pairsOf('LOAD')} 条 ['LOAD', …] —— DOM 侧没有负载图例，配上去就是造一个假事实（同 COOLANT／LIGHTING 判法）`)
+  else if (blind.length) bad('负载族配对扫描缺正对照', `同一条尺子在 check-tokens 里读不到 ${blind.join('/')} 任何一条成对 ⇒ 那个"LOAD 0 对"不算读数，尺子瞎了`)
+  else ok(`负载族没被塞进 DOM↔WebGL 成对表：check-tokens 里 LOAD 0 对（正对照：同一条尺子读到 ${PAIRED.map((g) => `${g} ${pairsOf(g)}`).join('／')} 条成对声明）`)
 }
 
 console.log(`\n[selftest-silhouette] pass=${pass} fail=${failures.length}`)
