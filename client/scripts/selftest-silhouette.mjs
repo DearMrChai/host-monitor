@@ -187,11 +187,22 @@ function normalized(tierKey, slotPx) {
 /* ---------- 陈列架折行：§1.1 要求那是一个可核对的数 ---------- */
 
 {
-  const expect = SHELF.maxSlotsPerRow * SHELF.slotWidthPx
-  if (SHELF.wrapAtContainerWidthPx === expect && SHELF.slotWidthPx === 240 && SHELF.maxSlotsPerRow === 4) {
-    ok(`折行阈值可核对：容器窄于 ${expect}px（= maxSlotsPerRow ${SHELF.maxSlotsPerRow} × 槽宽 ${SHELF.slotWidthPx}px）即出现第二排`)
+  /* H34 的销账：`SHELF.wrapAtContainerWidthPx` 是一个生产侧零消费者的惰常量（折行是
+     `shelfGrid` 现算的，没人读它），常量删了。但"删常量"不许顺手删成"删对账"——所以这一条
+     换成一对必须同时成立的读数：
+       反：这个键不许存在于 SHELF 里。谁把它加回来，这里红，红的原因是"复活了一个没人读的抄件"。
+       正：量尺还在（`slotWidthPx` 240 ＋ `maxSlotsPerRow` 4 两个真源键），960 由算式当场算出，
+           而且它**真的是墙**：恰好在 960px 排满 4 格一排，窄一像素就折成 3 格 2 排。
+     没有正半边，反半边是永真的空话——把 `slotWidthPx` 一起删掉它也照样绿。 */
+  const revived = 'wrapAtContainerWidthPx' in SHELF
+  const derived = SHELF.maxSlotsPerRow * SHELF.slotWidthPx
+  const at = shelfGrid(4, derived)
+  const below = shelfGrid(4, derived - 1)
+  const rulerOk = SHELF.slotWidthPx === 240 && SHELF.maxSlotsPerRow === 4 && derived === 960
+  if (!revived && rulerOk && at.cols === 4 && at.rows === 1 && below.cols === 3 && below.rows === 2) {
+    ok(`折行阈值只有一个家（算式）：SHELF 里不存在 wrapAtContainerWidthPx（H34 销账），${derived}px 由 maxSlotsPerRow ${SHELF.maxSlotsPerRow} × slotWidthPx ${SHELF.slotWidthPx}px 现算，且它是真墙——${derived}px 排 ${at.cols} 格 ${at.rows} 排 ／ ${derived - 1}px 折成 ${below.cols} 格 ${below.rows} 排`)
   } else {
-    bad('折行阈值必须等于 每排格数 × 槽宽', `${SHELF.wrapAtContainerWidthPx} ≠ ${expect}`)
+    bad('折行阈值不许有第二个家，也不许连量尺一起删', `键复活=${revived}／量尺完好=${rulerOk}（slotWidthPx ${SHELF.slotWidthPx}、maxSlotsPerRow ${SHELF.maxSlotsPerRow}、现算 ${derived}）／${derived}px→${at.cols}列${at.rows}排／${derived - 1}px→${below.cols}列${below.rows}排`)
   }
 }
 

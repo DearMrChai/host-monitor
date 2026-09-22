@@ -148,7 +148,6 @@ export const SHELF = {
   slotPitchWorld: 3.4,     // 槽口的世界单位宽度 = 排布间距，不是尺寸的模子
   rowPitchWorld: 2.6,      // 折第二排（往上层）的间距
   maxSlotsPerRow: 4,       // 一排最多几格；超过就进下一排
-  wrapAtContainerWidthPx: 960, // = maxSlotsPerRow × slotWidthPx：容器窄于此值即出现第二排
   baseY: 0.7,              // 组的世界高度（地牌落在地面上，沿用现值）
   bodySeatY: 0.44,         // 机体底面坐在牌面上（沿用现值：机体 y = 0.44 + 高/2）
   plinthThickness: 0.22,   // 地牌厚度（沿用现值；放这里是为了让折行不变量可被自检算）
@@ -161,7 +160,13 @@ export const SHELF = {
   maxCameraDistance: 60,   // 沿用原 _fitRadius 的上限
 }
 
-/** How many slots a row holds, and how many rows the fleet needs, in container px. */
+/** How many slots a row holds, and how many rows the fleet needs, in container px.
+ *
+ * 折行阈值在这里现算，**不留常量**（隐患清单 H34）：它就是下面那行的
+ * `maxSlotsPerRow × slotWidthPx`（今天＝4 × 240＝960px）。这一处先前另存过一份
+ * 960 的字面量，看着像旋钮、其实不接线——改它墙上纹丝不动，因为算式不读它；删掉它
+ * 的同时，`selftest-silhouette.mjs` 的对应断言换成了"那个键不许存在 ＋ 960 在边界上
+ * 真的是墙"的正／反对照。所以这里不是"没人守着 960"，是**只有算式守着它**。 */
 export function shelfGrid(count, containerWidthPx) {
   const cols = Math.max(1, Math.min(SHELF.maxSlotsPerRow, Math.floor((containerWidthPx || 0) / SHELF.slotWidthPx)))
   return { cols, rows: Math.max(1, Math.ceil(count / cols)) }
