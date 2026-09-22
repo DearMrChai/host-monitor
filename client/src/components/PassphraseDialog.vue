@@ -95,7 +95,7 @@ async function submit() {
 .pd label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text2); }
 .pd input {
   font: inherit; font-size: 13px; padding: 6px 8px;
-  border: 1px solid var(--border); border-radius: 7px; background: rgba(255,255,255,.6);
+  border: 1px solid var(--border); border-radius: 7px; background: var(--bg); color: var(--text);
 }
 .pd-err { margin: 0; font-size: 12px; color: var(--red); }
 .pd-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 2px; }

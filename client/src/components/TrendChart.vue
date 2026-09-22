@@ -70,7 +70,7 @@ const fmtT = (ts) => new Date(ts).toLocaleTimeString('zh-CN', { hour: '2-digit',
 .trend { width: 260px; }
 .trend-top { display: flex; justify-content: space-between; font-size: 11px; color: var(--text2); }
 .trend-last { font-weight: 600; color: var(--text); }
-.trend-svg { width: 100%; height: 64px; background: rgba(0, 0, 0, .03); border-radius: 6px; }
+.trend-svg { width: 100%; height: 64px; background: var(--bg); border-radius: 6px; }
 .trend-line { fill: none; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
 .th-warn { stroke: var(--orange); stroke-dasharray: 3 3; stroke-width: .8; }
 .th-crit { stroke: var(--red); stroke-dasharray: 3 3; stroke-width: .8; }

@@ -83,7 +83,7 @@ function metricText(a) {
 }
 .ap-title { font-size: 13px; font-weight: 600; }
 .ap-count {
-  font-size: 11px; background: rgba(0,0,0,.06); border-radius: 9px;
+  font-size: 11px; background: var(--bg); border-radius: 9px;
   padding: 0 7px; margin-left: 4px;
 }
 .ap-empty { font-size: 12px; color: var(--green); padding: 10px 0; }

@@ -321,7 +321,7 @@ onBeforeUnmount(() => {
 .k-health.ok { color: var(--green); border-color: var(--green); background: color-mix(in srgb, var(--green) 8%, transparent); }
 .k-health.warn { color: var(--orange); border-color: var(--orange); background: color-mix(in srgb, var(--orange) 10%, transparent); }
 .k-health.crit { color: var(--red); border-color: var(--red); background: color-mix(in srgb, var(--red) 10%, transparent); }
-.k-health.offline { color: var(--text2); border-color: var(--text3); background: rgba(0,0,0,.04); }
+.k-health.offline { color: var(--text2); border-color: var(--text3); background: var(--bg); }
 /* The screen's one DOM animation, spent on what must be noticed from across a
    room. The 3D pulses live inside the scene's own budget (§1.4). */
 .k-health.beat { animation: k-beat 1s ease-in-out infinite; }
@@ -386,10 +386,12 @@ onBeforeUnmount(() => {
 .k-why em { font-style: normal; color: var(--text3); font-size: .85em; }
 .k-why.lost { border-color: var(--red); color: var(--red); }
 
+/* 这层纱只管"压住画面"，两行字才是它要说的话：底色留在地面族里，
+   否则 --red 与 --text2 这两支按暗底排的色，压在米色纱上会一起读不出。 */
 .k-stale {
   position: absolute; inset: 0; z-index: 8; display: flex;
   flex-direction: column; align-items: center; gap: 8px; padding-top: 11vh;
-  background: rgba(245, 240, 230, .55); text-align: center;
+  background: color-mix(in srgb, var(--panel) 55%, transparent); text-align: center;
   font-size: max(26px, 1.9vw); font-weight: 700; letter-spacing: 1px;
   color: var(--red);
 }
@@ -404,13 +406,15 @@ onBeforeUnmount(() => {
 .k-agg-label { font-size: max(14px, .95vw); color: var(--text2); }
 .k-agg-bar {
   position: relative; flex: 1; height: 10px; min-width: 60px;
-  border-radius: 5px; background: rgba(0,0,0,.07); overflow: hidden;
+  border-radius: 5px; background: var(--bg); overflow: hidden;
 }
 .k-agg-fill {
   position: absolute; inset: 0 auto 0 0; background: var(--green);
   border-radius: 5px; transition: width .6s ease;
 }
-.k-agg-peak { position: absolute; top: 0; bottom: 0; width: 3px; background: rgba(0,0,0,.35); }
+/* 峰线是事实不是装饰，所以取亮侧；--text3 在这里只借亮度档（同 ClusterBar 的
+   `.agg-peak`），不新增色。 */
+.k-agg-peak { position: absolute; top: 0; bottom: 0; width: 3px; background: var(--text3); }
 .k-agg-val {
   font-size: max(20px, 1.5vw); font-variant-numeric: tabular-nums;
   min-width: 3.4em; text-align: right;

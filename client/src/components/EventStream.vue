@@ -118,7 +118,7 @@ export default { name: 'EventStream', emits: ['open'] }
 .es-title { font-size: 13px; font-weight: 600; }
 .es-title em {
   font-style: normal; font-size: 11px; color: var(--text2);
-  background: rgba(0,0,0,.06); border-radius: 9px; padding: 0 7px; margin-left: 5px;
+  background: var(--bg); border-radius: 9px; padding: 0 7px; margin-left: 5px;
 }
 .es-win { margin-left: auto; display: flex; border: 1px solid var(--border); border-radius: 11px; overflow: hidden; }
 .es-win button {
@@ -135,7 +135,7 @@ export default { name: 'EventStream', emits: ['open'] }
 .es-kinds { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
 .es-kinds button {
   font: inherit; font-size: 11px; cursor: pointer; padding: 1px 8px;
-  border: 1px solid transparent; border-radius: 9px; background: rgba(0,0,0,.04); color: var(--text2);
+  border: 1px solid transparent; border-radius: 9px; background: var(--bg); color: var(--text2);
 }
 .es-kinds button.on { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
 .es-at { margin-left: auto; font-size: 10px; color: var(--text3); }

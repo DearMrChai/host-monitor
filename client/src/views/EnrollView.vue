@@ -504,7 +504,7 @@ button { font: inherit; }
 .ec-os { font-size: 10px; color: var(--text3); width: 52px; flex-shrink: 0; }
 .en-cmd code {
   flex: 1; min-width: 0; font-family: ui-monospace, Consolas, monospace; font-size: 11px;
-  padding: 5px 8px; border-radius: 6px; background: rgba(0,0,0,.04); border: 1px solid var(--border);
+  padding: 5px 8px; border-radius: 6px; background: var(--bg); border: 1px solid var(--border);
   overflow-x: auto; white-space: nowrap; user-select: all;
 }
 .en-cmd button {

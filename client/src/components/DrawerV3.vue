@@ -318,7 +318,7 @@ const fmtDur = (ms) => {
 .core { width: 18px; text-align: center; }
 .core-bar {
   height: 56px; width: 10px; margin: 0 auto; border-radius: 3px;
-  background: rgba(0, 0, 0, .06); display: flex; align-items: flex-end; overflow: hidden;
+  background: var(--bg); display: flex; align-items: flex-end; overflow: hidden;
 }
 .core-bar i { display: block; width: 100%; background: var(--green); border-radius: 3px; }
 .core-bar i.warn { background: var(--orange); }
@@ -331,11 +331,11 @@ const fmtDur = (ms) => {
 
 .dw-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .dw-table th { text-align: left; color: var(--text3); font-weight: 400; font-size: 11px; padding: 2px 8px 4px 0; border-bottom: 1px dashed var(--border); }
-.dw-table td { padding: 4px 8px 4px 0; border-bottom: 1px solid rgba(0, 0, 0, .04); }
+.dw-table td { padding: 4px 8px 4px 0; border-bottom: 1px solid var(--border); }
 .pct { white-space: nowrap; }
 .pct-bar {
   display: inline-block; width: 70px; height: 5px; border-radius: 3px;
-  background: rgba(0, 0, 0, .07); vertical-align: middle; margin-right: 6px; overflow: hidden;
+  background: var(--bg); vertical-align: middle; margin-right: 6px; overflow: hidden;
 }
 .pct-bar i { display: block; height: 100%; background: var(--green); border-radius: 3px; }
 .pct-bar i.warn { background: var(--orange); }

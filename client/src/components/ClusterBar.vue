@@ -149,7 +149,7 @@ const bars = computed(() => {
 .health-pill.warn .hp-dot { background: var(--orange); }
 .health-pill.crit { color: var(--red); border-color: color-mix(in srgb, var(--red) 50%, transparent);  background: color-mix(in srgb, var(--red) 10%, transparent); }
 .health-pill.crit .hp-dot { background: var(--red); animation: pulse 1s infinite; }
-.health-pill.offline { color: var(--text2); border-color: var(--border); background: rgba(0,0,0,.04); }
+.health-pill.offline { color: var(--text2); border-color: var(--border); background: var(--bg); }
 .health-pill.offline .hp-dot { background: var(--text3); }
 
 .cb-online { font-size: 12px; color: var(--text2); }
@@ -185,10 +185,13 @@ const bars = computed(() => {
 .agg-label { font-size: 11px; color: var(--text2); }
 .agg-bar {
   position: relative; width: 90px; height: 6px;
-  background: rgba(0,0,0,.07); border-radius: 3px; overflow: hidden;
+  background: var(--bg); border-radius: 3px; overflow: hidden;
 }
 .agg-fill { position: absolute; inset: 0 auto 0 0; background: var(--green); border-radius: 3px; transition: width .6s; }
-.agg-peak { position: absolute; top: 0; bottom: 0; width: 2px; background: rgba(0,0,0,.35); }
+/* 峰线是一条事实（这台机历史上到过这个水位），而"比槽更暗"在暗地上读不出任何东西
+   （色表 R-2 推论），所以它反到亮侧。--text3 在这里只借它的亮度档：不是"这是三级
+   文字"，也不是新色——它就是文字族最暗那一支。 */
+.agg-peak { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--text3); }
 .agg-val { font-size: 11px; min-width: 62px; }
 .agg-val.na { color: var(--text3); }
 .agg-val em { font-style: normal; color: var(--text3); }

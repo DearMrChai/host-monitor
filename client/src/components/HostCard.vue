@@ -308,7 +308,7 @@ function pick(item) {
 }
 .hc-role {
   font-size: 10px; color: var(--text2); padding: 1px 8px; flex-shrink: 0;
-  border: 1px solid var(--border); border-radius: 9px; background: rgba(0,0,0,.03);
+  border: 1px solid var(--border); border-radius: 9px; background: var(--bg);
 }
 .hc-class { font-size: 10px; padding: 1px 6px; border-radius: 9px; flex-shrink: 0; }
 .hc-class.persistent { color: var(--green); background: color-mix(in srgb, var(--green) 10%, transparent); }
@@ -348,7 +348,7 @@ function pick(item) {
 
 .hcb { display: flex; align-items: center; gap: 8px; }
 .hcb-label { font-size: 11px; color: var(--text2); min-width: 30px; }
-.hcb-bar { flex: 1; height: 5px; background: rgba(0,0,0,.07); border-radius: 3px; overflow: hidden; }
+.hcb-bar { flex: 1; height: 5px; background: var(--bg); border-radius: 3px; overflow: hidden; }
 .hcb-fill { display: block; height: 100%; border-radius: 3px; background: var(--green); transition: width .6s; }
 .hcb-fill.warn { background: var(--orange); }
 .hcb-fill.crit { background: var(--red); }
@@ -372,10 +372,12 @@ function pick(item) {
   border: 1px dashed var(--text3); border-radius: 6px; color: var(--text3);
 }
 
+/* 浮层是一块地面，不是一张白纸：卡里这些字（--text/--text2/--orange/--red/--accent）
+   从来就是按暗底排的，压在浅底上会一起读不出。 */
 .hc-menu {
   position: absolute; top: 34px; right: 10px; z-index: 50; min-width: 172px;
   display: flex; flex-direction: column; gap: 2px; padding: 6px;
-  background: #fff; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
   box-shadow: 0 8px 26px rgba(0,0,0,.14); cursor: default;
 }
 .hcm-backdrop { position: fixed; inset: 0; z-index: 40; }
@@ -386,7 +388,10 @@ function pick(item) {
 .hcm-item:hover { background: rgba(0,0,0,.05); }
 .hcm-item.danger { color: var(--red); }
 .hcm-item.primary { color: var(--accent); font-weight: 600; }
-.hcm-input { font: inherit; font-size: 12px; padding: 5px 7px; border: 1px solid var(--border); border-radius: 7px; }
+.hcm-input {
+  font: inherit; font-size: 12px; padding: 5px 7px;
+  border: 1px solid var(--border); border-radius: 7px; background: var(--bg); color: var(--text);
+}
 .hcm-lock { margin: 2px 8px 4px; font-size: 11px; color: var(--orange); }
 .hcm-confirm {
   margin: 2px 4px 4px; font-size: 11px; line-height: 1.5; color: var(--text2);
