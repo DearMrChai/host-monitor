@@ -13,16 +13,18 @@
  * ⚠️ 这些断言量的是**代码链条在不在**，不是**手感**。真机点一下好不好用、kiosk 上点击
  * 该不该有、默认屏改成哪一屏——视觉与手感一律「未验证，交人眼看一次」。
  *
- * 实测结论（09-22 深夜，逐环开过行号，本轮零改动）写在本文件末尾的「结论」一节，
- * 也在提交说明里；一句话版：
- *   ② 前半（一次点击进 A1）非 kiosk 路径**通**、kiosk 路径**断**（断在一处已入库的
- *      交互决策上，S4 §2.5「值守屏无钻取」）；② 后半（一次**按键**回 A0）按字面口径
- *      **断**（A1 上没有任何键盘绑定，只有一颗返回按钮）。
- *   ③ 「不持久化视图／选中态」这一半**通**且已被钉住；「刷新必是陈列架」这一半在非
- *      kiosk 路径上**断**（默认落在「总览」＝T0 台账表，不是 A0）。
- * ⇒ 断的那几处**不自行修**：改默认落地屏、给墙上装点击、给 A1 加键盘出口，三条都是
- *   交互模型改动，交人裁。本文件钉的是**现状**，它们变红＝有人动了交互模型，
- *   那时要连判据文案一起改，不许静默变绿。
+ * 实测结论（09-22 深夜逐环开过行号）＋ **同一夜他对这三处的裁定**（判据口径以裁定后为准）：
+ *   ② 前半 一次点击进 A1：**只在桌面（非 ?kiosk）判**，那里通（四段链条各一处）。
+ *      墙上不判——墙按 S4 §2.5「值守屏无钻取 / never touched」故意不可点，他裁"墙上永远不点"，
+ *      所以"墙没有点击"**不再是判据② 的欠账**；这条断言从"记录断"改成"当闸门"：谁给墙上
+ *      装点击，它红，而要改的是那条禁则本身（得他点头），不是把这条改绿。
+ *   ② 后半 原字面"一次**按键**回 A0" → **他改成"一次点击回"**（点那颗「← 拓扑」就算那一次）。
+ *      全仓 A1 上至今没有键盘出口，这一格从"未过"变成"合规"；键盘缺席仍被钉着，理由见 B 组。
+ *   ③ 刷新／重开必是陈列架：**只在墙上判**，那一通（?kiosk 是 URL flag，mode 每次载入重决）。
+ *      桌面刷新落「总览」（App.vue:37 唯一一个初值）→ 他裁"非 kiosk 不管"，**不再是欠账**；
+ *      那个初值继续钉住，是因为它一旦漂移，决策 6 那句"A0 默认态，也是唯一常态"就得重说指谁。
+ * ⇒ 三处原本的"断"至此全部收口：两处是**判据范围收窄**（② 归桌面、③ 归墙），一处是**字面改口径**
+ *   （按键→点击）。本文件钉的仍是**现状**：变红＝有人动了交互模型，那时连判据文案一起改，不许静默变绿。
  *
  * Run: node client/scripts/selftest-nav.mjs   (exit 1 on failure)
  */
@@ -153,7 +155,7 @@ const CODE_INTACT = /function openDetail\(hostId\)/.test(APP)
 }
 
 /* =========================================================================
-   B 组 · 判据② 后半：从 A1 回 A0 是不是"一次按键"
+   B 组 · 判据② 后半：从 A1 回 A0 是不是"一次点击"（原字面"一次按键"已由他 09-22 改掉）
    ========================================================================= */
 
 /* 回程一颗按钮、一个出口，并且它知道 A0 叫什么。 */
@@ -175,17 +177,20 @@ const CODE_INTACT = /function openDetail\(hostId\)/.test(APP)
   else ok(`判据② 后半（点击口径）：A1 只有一颗返回出口（$emit('back') ×${emitBacks}）→ App 接 backFromDetail → 按 route.from 归位，且 BACK_TEXT 里 topology 这一支在（文案现值「${label}」，本轮不改文案）`)
 }
 
-/* "按键"的字面口径：A1 上没有任何键盘绑定。这条 0 命中是判据②后半**按字面不过**的
-   证据，同时被正对照钉住（全仓唯一的键盘绑定在 HostCard 的改名输入框里）。 */
+/* "一次按键"这四个字已于 09-22 深夜由他改掉：**判据② 后半的口径＝"一次点击回"**（点
+   上面那颗返回按钮就算那一次）。所以这一条 0 命中**不再是"判据不过"的证据，而是合规现状**：
+   A1 上本来就不该有键盘出口。它继续钉在这里有两个理由——① 它是那条"回程＝一颗按钮"判据的
+   正对照（尺子看得见键盘）；② 哪天真加了 Esc 回程，这里必须红，逼着改的人**连判据文案一起
+   改**，而不是让代码和判据各说一套。*/
 {
   const KEY_RE = /@keydown|@keyup|addEventListener\(\s*['"]key/gi
   const keySites = SRC_FILES.flatMap((f) => hits(codeOf(f), KEY_RE).map((m) => `${f}:${m[0]}`))
   const onA1 = keySites.filter((s) => /^views\/(?:DetailView|KioskView)\.vue/.test(s))
   const outsideRename = keySites.filter((s) => !s.startsWith('components/HostCard.vue'))
   const control = keySites.filter((s) => s.startsWith('components/HostCard.vue'))
-  if (control.length === 0) bad('A1 上没有键盘出口（现状登记）', `正对照失效——同一条模式在全仓 ${SRC_FILES.length} 个源文件里一处键盘绑定也量不到，那个 0 不是读数`)
-  else if (onA1.length || outsideRename.length) bad('A1 上没有键盘出口（现状登记）', `键盘绑定从 HostCard 改名框之外冒出来了：${(onA1.concat(outsideRename)).join(' / ')}——判据②后半的字面口径可能已经通了，这条要连判据文案一起改，别静默变绿`)
-  else ok(`判据② 后半「一次按键」按字面**未过**（现状钉住）：全仓键盘绑定 ${keySites.length} 处全在 components/HostCard.vue 的改名输入框里，A1／kiosk／外壳 0 处 ⇒ 回程只有上面那条按钮路径，"一次按键回 A0"按字面不成立（正对照即这 ${control.length} 处：尺子看得见键盘）⇒ 补键盘出口属交互模型改动，交人裁`)
+  if (control.length === 0) bad('A1 上没有键盘出口（口径已定为点击）', `正对照失效——同一条模式在全仓 ${SRC_FILES.length} 个源文件里一处键盘绑定也量不到，那个 0 不是读数`)
+  else if (onA1.length || outsideRename.length) bad('A1 上没有键盘出口（口径已定为点击）', `键盘绑定从 HostCard 改名框之外冒出来了：${(onA1.concat(outsideRename)).join(' / ')}——他 09-22 裁的是"一次点回"，这一族若真加了键盘出口，要连本文件顶上的判据文案一起改，不许静默变绿`)
+  else ok(`判据② 后半口径已定为"一次点回"（他 09-22 夜裁，原字面"一次按键回 A0"作废）：全仓键盘绑定 ${keySites.length} 处全在 components/HostCard.vue 的改名输入框里，A1／kiosk／外壳 0 处 ⇒ 回程只有上面那颗按钮这一条，且与判据一致（正对照即这 ${control.length} 处：尺子看得见键盘）`)
 }
 
 /* =========================================================================
@@ -236,7 +241,7 @@ const CODE_INTACT = /function openDetail\(hostId\)/.test(APP)
   const nameLit = init && (init.match(/name:\s*'([^']*)'/) || [])[1]
   const wantsStorage = init && /(Storage|params|location|getItem|URLSearchParams)/.test(init)
   const openLit = (APP.match(/function openDetail\(hostId\)[\s\S]{0,240}?name:\s*'([^']*)'/) || [])[1]
-  const WANT = 'overview'   // 09-22 实测的现值；钉它不是判它对了
+  const WANT = 'overview'   // 09-22 实测的现值。他裁"判据③ 只在墙上判"之后，钉它的意义是**钉住这一屏不因竖切而漂**，不是判它对
   const wrong = []
   if (!CODE_INTACT) wrong.push('尺子失效——剥注释后读不到状态机锚点')
   if (!init) wrong.push('App.vue 里读不到 `const route = ref({...})` 这一行——默认屏不再由一处决定，判据③ 失去可核对的落点')
@@ -244,7 +249,7 @@ const CODE_INTACT = /function openDetail\(hostId\)/.test(APP)
   else if (openLit !== 'detail') wrong.push(`尺子失效——同一条抽取在 openDetail 里没读到 name:'detail'（实读 ${openLit}），那条初值读数不算数`)
   else if (nameLit !== WANT) wrong.push(`新载入默认屏从「${WANT}」变成了「${nameLit}」。两种可能：① 有人按判据③ 把它改成陈列架（那是交互模型改动，交人裁过没有？）② 顺手改的。无论哪种，这条与它上面那句结论都要连字面一起改，不许静默变绿`)
   if (wrong.length) bad('默认落地屏只有一个字面量', wrong.join('; '))
-  else ok(`判据③ 的另一半：新载入落哪一屏由 App.vue 里唯一一个初值决定（name:'${nameLit}'，且不读存储／URL；同一条抽取在 openDetail 处读到的是 '${openLit}'，尺子看得见这两个字面量）——⚠️ 现值 'overview' 是「总览」＝T0 台账表，**不是 A0 陈列架**，故判据③ 在非 kiosk 路径上按任务书口径未过，登记交人裁（决策 6 写的是"A0 默认态，也是唯一常态"）`)
+  else ok(`判据③ 的另一半（09-22 夜他已把这条**收窄到墙上**）：新载入落哪一屏由 App.vue 里唯一一个初值决定（name:'${nameLit}'，且不读存储／URL；同一条抽取在 openDetail 处读到的是 '${openLit}'，尺子看得见这两个字面量）⇒ 桌面（非 ?kiosk）默认落「${nameLit}」＝T0 台账表，**这不再是欠账**：判据③ 的适用范围是墙，而墙上那一路见下面那条；桌面初值继续钉在这里，是因为它一旦漂移（包括被"顺手"改），决策 6 那句"A0 默认态，也是唯一常态"到底指哪一屏就得重说一遍`)
 }
 
 /* kiosk 那一侧：墙由 URL 上的一个 flag 决定，降级模式不许跨过刷新。
@@ -263,8 +268,10 @@ const CODE_INTACT = /function openDetail\(hostId\)/.test(APP)
   else ok(`判据③ 在墙上这一路**通**：?kiosk 决定渲染 KioskView（App.vue 一处 query flag，模块加载期读一次），降级 mode 每次载入只由 ?flat=1 重新决定（正对照：初值里确实只读 props.forceFlat → 'flat'／'scene'）——一次掉帧不会跨过刷新`)
 }
 
-/* 墙上没有钻取入口（S4 §2.5「值守屏无钻取」）——这是判据② 在 kiosk 上**断**的证据，
-   钉现状用。它变红＝有人改了交互模型，那是交人裁的事，不是改这条判据的理由。 */
+/* 墙上没有钻取入口（S4 §2.5「值守屏无钻取」）。09-22 夜他据此把**判据② 的适用范围定成桌面**
+   ⇒ 这条 0 命中从"判据② 在 kiosk 上断"改成"墙按已入库的禁则做对了"。它继续钉着是当**闸门**用：
+   哪天有人给墙上装点击（哪怕是为了让竖切好看），这里必须红，然后要改的是 S4 §2.5 那条禁则本身，
+   得他点头，不是把这条断言改绿。 */
 {
   const kioskClicks = nOf(KIOSK_VIEW, /enableClicks|onNodeClick/g)
   const kioskNonInteractive = /interactive:\s*false/.test(KIOSK_VIEW)
@@ -279,7 +286,7 @@ const CODE_INTACT = /function openDetail\(hostId\)/.test(APP)
   if (!kioskNonInteractive) wrong.push('KioskView 不再传 interactive:false——A0 渲染器的点击守卫在值守屏上失效了')
   if (detailInKioskBranch) wrong.push('?kiosk 分支里挂上了 DetailView：kiosk 路径开始能进 A1（同上，交人裁）')
   if (wrong.length) bad('墙上没有钻取入口（现状登记）', wrong.join('; '))
-  else ok(`判据② 在 kiosk 路径上**断**（现状钉住，非本轮修法）：KioskView 里 enableClicks／onNodeClick 0 处且传 interactive:false，?kiosk 分支不渲染 DetailView ⇒ 刷新必是陈列架成立、一次点击进 A1 不成立（正对照：同一条模式在 TopologyView 命中 ${control} 处、App.vue 里 <DetailView 挂载点 ${controlDetail} 处）——要通这一条得改 S4 §2.5，交人裁`)
+  else ok(`判据② 的适用范围＝桌面（他 09-22 夜裁）：KioskView 里 enableClicks／onNodeClick 0 处且传 interactive:false，?kiosk 分支不渲染 DetailView ⇒ 墙上"不可点"是 S4 §2.5 那条禁则的**正确执行**，不再记成竖切判据的一条欠账；一次点击进 A1 只在非 kiosk 那条路上判（正对照：同一条模式在 TopologyView 命中 ${control} 处、App.vue 里 <DetailView 挂载点 ${controlDetail} 处）`)
 }
 
 /* 陈列架在两条路上都到得了：非 kiosk 经顶栏那一格「拓扑」，且顶栏只画四格。 */
@@ -317,19 +324,20 @@ const CODE_INTACT = /function openDetail\(hostId\)/.test(APP)
 }
 
 /* =========================================================================
-   结论（本轮实测，逐环开过行号；改判必须连本文件上面的判据一起改）
+   结论（09-22 深夜实测逐环开行号 ＋ 同一夜他的三条范围裁定；改判必须连上面判据一起改）
    =========================================================================
-   · 判据②  非 kiosk：通（拾取 → emit('open') → @open="openDetail" → name:'detail'，
-              四段各一处；回程一颗 $emit('back') 按 from 归位）。
-              ⚠️ 字面口径"一次**按键**"未通：A1 上没有键盘绑定。
-   · 判据②  kiosk（?kiosk，也就是客厅那面墙实际跑的那一路）：**断**。
-              KioskView 传 interactive:false、不调 enableClicks、不挂 DetailView，
-              依据是 S4 §2.5「值守屏无钻取」。这一条与竖切判据②正面冲突 ⇒ 交人裁。
-   · 判据③  「视图／选中态不持久化」：通，且是 A0 之后第一次被钉住。
-              新载入落哪一屏由 App.vue 里唯一一个 name 字面量决定 ⇒ 现值 'overview'
-              （总览＝T0 台账表），不是 A0 ⇒ 判据③ 在非 kiosk 路径上**未过**。
-              kiosk 那一路：?kiosk 是 URL flag，刷新必回墙 ⇒ 通。
-   · 以上三处"断"全在交互模型上，本包一律**只登记不修**（任务书 B §5 该问再碰那一档）。
+   · 判据② 前半（一次点击进 A1）＝**桌面这一路通**：拾取 → emit('open') → @open="openDetail"
+              → name:'detail'，四段各一处；回程一颗 $emit('back') 按 from 归位。
+              口径已改：后半是"一次**点击**回"（原字面"按键"由他 09-22 夜作废）。
+   · 判据② 与墙的关系＝**不在墙上判**（他裁）。KioskView 传 interactive:false、不调
+              enableClicks、不挂 DetailView，依据是 S4 §2.5「值守屏无钻取」——这一格从
+              "与判据正面冲突"改记为"禁则被正确执行"。要让墙上可点＝推翻 S4 §2.5，得他点头。
+   · 判据③  「视图／选中态不持久化」：通，且是 A0 之后第一次被钉住（31 个源文件、存储读写
+              5 处都不是导航键、URL 侧导航写点 0 处）。
+              桌面这一路：新载入落 'overview'（总览＝T0 台账表）——他裁"只在墙上判这条"
+              ⇒ **不再记欠账**，但那个唯一初值继续钉住，漂了要红。
+              墙这一路：?kiosk 是 URL flag，刷新必回墙 ⇒ **通**。
+   · 上面三处至此全部收口，收的都是**口径与范围**，没有一处是改代码去迁就判据。
    · 视觉与真机手感：**未验证，交人眼看一次**。
    ========================================================================= */
 
