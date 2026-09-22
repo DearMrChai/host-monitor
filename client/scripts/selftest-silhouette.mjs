@@ -704,22 +704,24 @@ const PLATE_RULES = STYLE_PLATE.concat(KIOSK_PLATE)
 }
 
 /* ==========================================================================
-   V3 包 2 步 3 · A0 无面板变体（牌面那一层 backdrop-filter 撤掉）
+   V3 包 2 步 3 · A0 无面板变体 —— **本步已于 09-22 深夜撤回**
    --------------------------------------------------------------------------
-   毛玻璃是这一屏里唯一按帧付费的样式，而它买到的只有"糊一点"。撤的判法不是
-   "文件里少了一行"，而是两件事：① 机体牌身上赢得过基规则那一份 blur（A1 共用它，
-   本轮不许动 A1）；② 仍然活着的每一处 blur 都能点名到它属于哪一屏。
+   撤回归档，不是删掉：这一步当时唯一的非审美理由是"每帧重采样＝钱"，而那个理由被实测
+   否掉了（标签页可见时，4 张牌在 none／blur(4px)／blur(20px) 三态各测一批，全部
+   16.7ms、共约 590 帧零掉帧 ⇒ 半径放大 5 倍也吃不到一帧的余量）。所以画面回到基规则
+   那份 blur，牌面身上不许再出现任何 `backdrop-filter` 声明——**这条判据现在防的是
+   "有人不带着墙机读数又把 blur 撤一遍"**（`KioskView.vue` 那条禁则说的是整屏面积）。
    ========================================================================== */
 
 {
   const base = cssRules(STYLE_CSS).find((r) => r.sel === '.topo-label')
   const host = plateRulesOf(cssRules(STYLE_CSS)).filter((r) => r.sel.includes('topo-host'))
   const still = hitsOf(stripCss(STYLE_CSS), /backdrop-filter:\s*blur\(/)
-  if (!base) bad('A0 牌面撤掉背景模糊', '尺子失效——style.css 里读不到 `.topo-label` 那条基规则，下面什么都判不了')
+  const onHost = host.filter((r) => /backdrop-filter/.test(r.body))
+  if (!base) bad('A0 机体牌沿用基规则的 blur', '尺子失效——style.css 里读不到 `.topo-label` 那条基规则，下面什么都判不了')
   else if (!/backdrop-filter:\s*blur\(/.test(base.body)) bad('A1 的标签被碰了', '`.topo-label` 基规则里的 blur 不见了——详情页本轮一行不碰，A1 的芯片标签读的就是这一份')
-  else if (!host.some((r) => /backdrop-filter:\s*none/.test(r.body))) bad('A0 牌面撤掉背景模糊', '机体牌身上没有一条 `backdrop-filter: none`， blur 还在按帧付费')
-  else if (host.some((r) => /backdrop-filter:\s*blur\(/.test(r.body))) bad('A0 牌面撤掉背景模糊', `.topo-host 里又写回了一层 blur：${host.filter((r) => /blur\(/.test(r.body)).map((r) => r.sel).join(' / ')}`)
-  else ok(`A0 牌面撤掉背景模糊：基规则 .topo-label 那份 blur(4px) 原样留给 A1，机体牌由 .topo-host(0,2,0>0,1,0) 覆盖为 none（正对照：全文件仍有 ${still} 处 backdrop-filter: blur()，一处也数不清＝尺子瞎了）`)
+  else if (onHost.length) bad('A0 机体牌沿用基规则的 blur', `牌面身上又出现了 backdrop-filter 声明：${onHost.map((r) => `${r.sel}{${r.body.trim()}}`).join(' / ')}——步 3 已撤回，要再撤得先带墙机上的帧率读数`)
+  else ok(`A0 机体牌沿用基规则那份 blur(4px)：.topo-host 族 ${host.length} 条规则里 backdrop-filter 0 处，覆盖已撤（正对照：基规则仍在，全文件仍有 ${still} 处 backdrop-filter: blur()，一处也数不清＝尺子瞎了）`)
 }
 
 {

@@ -247,30 +247,13 @@ html, body, #app {
    决定，牌面因此也不会留一条空带子把机名往下推。 */
 .topo-label.topo-host.plate-no-status .tl-sub { display: none; }
 
-/* A0 无面板变体 —— V3 包 2 步 3（素材清单 §2「面板与毛玻璃」那一格）。
-   墙是 24×7 常驻的低功耗机器，而 `.topo-label` 是叠在全屏 WebGL 画布**之上**的
-   CSS2D 层：每张牌一层 `backdrop-filter: blur()`＝每帧把身后那块画面重采样一次，
-   台数越多、牌越大，这笔账越贵，而它买到的只有"糊一点"。这条账 KioskView 自己就记过
-   （`src/views/KioskView.vue:303`，禁则 2："Nothing here uses backdrop-filter:
-   full-screen per-frame compositing is the single easiest way to fall under 20fps
-   on a GT 1030"），那一屏自己的面板也都这么画：`.k-top`／`.k-bottom` 等 5 处
-   `background: var(--bg-glass)` 全都没有 `backdrop-filter`。牌面是这个屏幕上唯一还在
-   blur 的一层，所以撤掉它，让它与同屏其他面板同一口径。
-   只撤 A0 这一层：基规则 `.topo-label` 那句 `blur(4px)` 原样留着——A1 的芯片标签共用
-   它，而详情页本轮一行不碰；`.topo-host`（0,2,0）比 `.topo-label`（0,1,0）特异性高、
-   写在其后，机体牌读到的是 `none`。
-   离开毛玻璃之后牌面靠什么还是一块牌：靠 `--panel`@92% 相对 `--bg` 那 1.155 的面差
-   ＋它自己那条 1px `--border`（描边 vs 地面 CR 1.418，正是色表 §2.1 那条 1.42；
-   描边 vs 牌面自身 1.227——这条边在牌内一侧本来就比在地面一侧弱）。
-   算过的两笔（都是数出来的，不是感觉）：
-   - 92% 那一层"透明"本来就几乎不透明：牌面合成色与不透明的 --panel 只差 CR 1.016，
-     也就是背后那 8% 至多把牌面亮度挪动 ≤15%（CR≤1.151，即便底下压着一块亮机体）。
-   - alpha 合成与 `backdrop-filter` 无关——撤掉 blur 不改上面任何一支 CR，改的只是那
-     8% 的形状。所以"看不见的面板"这一问，答案是：透明那半本来就读不见，读得见的
-     一直是面差＋描边，而这两样 R-3 本来就指定它们负责。
-   ⚠️ 帧率与"还看不看得出是一块牌"都**未验证**：验收语要求 231 上实测帧率不低于现状，
-   本轮不许起浏览器，交人眼看一次。 */
-.topo-label.topo-host { backdrop-filter: none; }
+/* A0 机体牌这层 blur(4px) 从基规则 `.topo-label` 继承，A1 的芯片标签共用它。
+   V3 包 2 步 3 曾在此加 `.topo-host{backdrop-filter:none}` 撤掉它，理由是"每帧重采样
+   身后的 WebGL 画面＝24×7 常驻墙白花花的钱"。09-22 深夜实测否掉了这个理由：标签页可见
+   时 4 张牌在 none／blur(4px)／blur(20px) 三态都是 16.7ms、约 590 帧零掉帧——半径放大
+   5 倍都吃不到一帧的余量。⇒ 已撤回（他裁"不为它专门验收一次"）。
+   ⚠️ 将来要再撤，得带**墙机（低功耗 GPU）上的帧率读数**来：上面的"0 差别"量在本机，而
+   `KioskView.vue` 禁则里"blur 最容易掉到 20fps 以下"说的是**整屏面积**，不是四张小牌。 */
 
 /* 部件标签名 → 结构族 §2.5（任务书 §6.2 B 组）。牌面上写的是"这块芯片是什么"，
    所以名字的颜色就是它那一族的身份色，与 3D 线色／图例同一支（palette.STRUCT
