@@ -703,5 +703,50 @@ const PLATE_RULES = STYLE_PLATE.concat(KIOSK_PLATE)
   else ok(`文案只有一个家：「${SENTENCE}」在 style.css／KioskView／A0 渲染器 0 处（正对照：lib/plate.js 有这一支，且本脚本上面那条判据正从它身上读值）`)
 }
 
+/* ==========================================================================
+   V3 包 2 步 3 · A0 无面板变体（牌面那一层 backdrop-filter 撤掉）
+   --------------------------------------------------------------------------
+   毛玻璃是这一屏里唯一按帧付费的样式，而它买到的只有"糊一点"。撤的判法不是
+   "文件里少了一行"，而是两件事：① 机体牌身上赢得过基规则那一份 blur（A1 共用它，
+   本轮不许动 A1）；② 仍然活着的每一处 blur 都能点名到它属于哪一屏。
+   ========================================================================== */
+
+{
+  const base = cssRules(STYLE_CSS).find((r) => r.sel === '.topo-label')
+  const host = plateRulesOf(cssRules(STYLE_CSS)).filter((r) => r.sel.includes('topo-host'))
+  const still = hitsOf(stripCss(STYLE_CSS), /backdrop-filter:\s*blur\(/)
+  if (!base) bad('A0 牌面撤掉背景模糊', '尺子失效——style.css 里读不到 `.topo-label` 那条基规则，下面什么都判不了')
+  else if (!/backdrop-filter:\s*blur\(/.test(base.body)) bad('A1 的标签被碰了', '`.topo-label` 基规则里的 blur 不见了——详情页本轮一行不碰，A1 的芯片标签读的就是这一份')
+  else if (!host.some((r) => /backdrop-filter:\s*none/.test(r.body))) bad('A0 牌面撤掉背景模糊', '机体牌身上没有一条 `backdrop-filter: none`， blur 还在按帧付费')
+  else if (host.some((r) => /backdrop-filter:\s*blur\(/.test(r.body))) bad('A0 牌面撤掉背景模糊', `.topo-host 里又写回了一层 blur：${host.filter((r) => /blur\(/.test(r.body)).map((r) => r.sel).join(' / ')}`)
+  else ok(`A0 牌面撤掉背景模糊：基规则 .topo-label 那份 blur(4px) 原样留给 A1，机体牌由 .topo-host(0,2,0>0,1,0) 覆盖为 none（正对照：全文件仍有 ${still} 处 backdrop-filter: blur()，一处也数不清＝尺子瞎了）`)
+}
+
+{
+  /* 逐处点名：仍然写 blur 的选择器必须**恰好**是这三条，并且每一条都说得出它在哪个屏上。
+     任务书给的行号（:96/:136/:152）与仓库现值（:139/:185/:216）已经漂开，所以这里
+     钉的是"谁在用"，不是"在第几行"。 */
+  const blurSites = cssRules(STYLE_CSS).filter((r) => /backdrop-filter:\s*blur\(/.test(r.body)).map((r) => r.sel).sort()
+  const WANT = ['.bus-legend', '.metrics-hud', '.topo-label']
+  const consumersOf = (cls, files) => files.filter((f) => readSrc(f).includes(cls)).map((f) => f.replace(/\.vue$|\.js$/, ''))
+  const A0_FILES = ['views/KioskView.vue', 'views/TopologyView.vue', 'three/ClusterTopologyRenderer.js', 'lib/plate.js']
+  const ALL_FILES = A0_FILES.concat(['views/DetailView.vue', 'three/TopologyRenderer.js', 'components/HudPanel.vue'])
+  const owners = {
+    '.bus-legend': consumersOf('bus-legend', ALL_FILES),
+    '.metrics-hud': consumersOf('metrics-hud', ALL_FILES),
+    '.topo-label': consumersOf('topo-label', ALL_FILES),
+  }
+  const wrong = []
+  if (blurSites.join(' ') !== WANT.join(' ')) wrong.push(`还在写 blur 的选择器不是这三条：实际「${blurSites.join(' / ')}」，应为「${WANT.join(' / ')}」`)
+  if (!owners['.bus-legend'].includes('views/DetailView')) wrong.push(`.bus-legend 的主人读不到 DetailView（实测 ${owners['.bus-legend'].join('/') || '无消费方'}）——那一处 blur 属于 A1 还是别处，说不清`)
+  const plateOwners = owners['.topo-label']
+  if (!plateOwners.some((f) => ['lib/plate', 'three/ClusterTopologyRenderer', 'views/KioskView', 'views/TopologyView'].includes(f))) wrong.push(`.topo-label 在 A0 侧读不到消费方（实测 ${plateOwners.join('/') || '无'}），那它身上这层 blur 留着就没有"A1 共用"这个理由了`)
+  if (owners['.metrics-hud'].length) wrong.push(`.metrics-hud 已有消费方（${owners['.metrics-hud'].join(' / ')}），那它就不是死规则，步 3 该把它也算进 A0 的账`)
+  const control = consumersOf('hud-row', ALL_FILES)
+  if (!control.length) bad('每一处 blur 都有主人', '尺子失效——同一条扫描在仓库里读不到 .hud-row 这个必然存在的类，那个"metrics-hud 0 消费方"不算读数')
+  else if (!wrong.length) ok(`每一处 blur 都有主人：${WANT.map((s) => `${s}→${owners[s].join('/') || '（0 消费方＝死规则，登记不删）'}`).join(' | ')}（正对照：同一条扫描在 ${control.join('/')} 读得到 .hud-row）`)
+  else bad('每一处 blur 都有主人', wrong.join('; '))
+}
+
 console.log(`\n[selftest-silhouette] pass=${pass} fail=${failures.length}`)
 process.exit(failures.length ? 1 : 0)
