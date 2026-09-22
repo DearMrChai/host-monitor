@@ -262,7 +262,8 @@ onBeforeUnmount(() => {
 <style scoped>
 .detail-main { display: flex; width: 100%; height: 100%; min-height: 0; }
 .detail-main .viewport-wrap { flex: 1; width: auto; min-width: 0; }
-.viewport-wrap.offline .viewport { filter: saturate(.15) opacity(.8); }
+/* 去色＝"这台不在"，是合法的信息；压暗＝"这里没东西"，与色表 R-2 推论相反，故只留 saturate */
+.viewport-wrap.offline .viewport { filter: saturate(.15); }
 
 .back-btn {
   font: inherit; font-size: 12px; cursor: pointer;
